@@ -82,6 +82,17 @@ port reproduces every one. (Region/admin questions use the KML region model,
 which the Python oracle can't consume, so they're covered by dedicated unit
 tests in `src/__tests__/admin.test.ts` instead.)
 
+## Deploying
+The app is fully static (`vite.config.ts` sets `base: "./"`, so it works from any
+host or subpath). `npm run build` emits everything—including the prebuilt dataset
+and map tiles—into `dist/`, which you can upload to any static host (Netlify,
+Cloudflare Pages, S3, …).
+
+`.github/workflows/deploy.yml` publishes to **GitHub Pages** on every push to
+`main`: it runs the tests, builds `dist/`, and deploys it. To enable it, push the
+repo to GitHub and set **Settings → Pages → Build and deployment → Source** to
+**GitHub Actions**.
+
 ## Regenerating the dataset
 The app ships with `public/data/dataset.json` prebuilt. To regenerate it (e.g.
 after a map or OSM refresh, or a config change) you need the `jetlag_mapper`
