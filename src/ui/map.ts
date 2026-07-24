@@ -31,7 +31,10 @@ function divPin(emoji: string, color: string): L.DivIcon {
     className: "jl-pin",
     html: `<span style="--pin:${color}">${emoji}</span>`,
     iconSize: [28, 28],
-    iconAnchor: [14, 26],
+    // The glyph is centred in the 28x28 box (see .jl-pin span), so anchor at the
+    // box centre. A bottom anchor would render these symmetric markers ~12px
+    // north of their true location (e.g. the seeker dot off-centre in its radar).
+    iconAnchor: [14, 14],
   });
 }
 
