@@ -8,7 +8,7 @@
 // because the app supports the seeker physically moving between two points.
 
 import { distMi, haversineMi, pointInPolygon } from "./geometry";
-import type { AdminPolygon, Dataset, Feature, LatLon, QuestionSpec } from "./types";
+import type { AdminPolygon, Dataset, Feature, LatLon, QuestionCategory, QuestionSpec } from "./types";
 
 export const NULL = "_null_";
 
@@ -162,5 +162,39 @@ export function answerQuestion(
       return matchingAdminAnswer(hider, seeker, ds.admin_polygons[String(q.payload)] ?? []);
     default:
       throw new Error(`answerQuestion: unsupported category ${q.category}`);
+  }
+}
+
+// The full set of answers a question could produce, independent of any candidate.
+// Powers the preview so every option is offered — even one that would eliminate
+// every remaining candidate (e.g. the hider's location isn't in our candidate
+// set). When a question's underlying data is missing, its only answer is NULL,
+// mirroring the answerers above.
+export function possibleAnswers(
+  category: QuestionCategory,
+  payload: string | number,
+  ds: Dataset,
+): Answer[] {
+  switch (category) {
+    case "radar":
+      return [true, false];
+    case "thermometer":
+      return ["hotter", "colder", "same"];
+    case "measuring": {
+      const feats = ds.features_by_kind[String(payload)] ?? [];
+      return feats.length === 0 ? [NULL] : ["closer", "further", "tie"];
+    }
+    case "coast":
+      return ds.coastlines.length === 0 ? [NULL] : ["closer", "further", "tie"];
+    case "matching": {
+      const feats = ds.features_by_kind[String(payload)] ?? [];
+      return feats.length === 0 ? [NULL] : ["yes", "no"];
+    }
+    case "admin": {
+      const polys = ds.admin_polygons[String(payload)] ?? [];
+      return polys.length === 0 ? [NULL] : ["yes", "no", "yes_both_outside"];
+    }
+    default:
+      return [];
   }
 }

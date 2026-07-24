@@ -88,6 +88,22 @@ describe("EliminationEngine radar elimination", () => {
     eng.apply(spec, true);
     expect(eng.survivors().length).toBe(0);
   });
+
+  it("offers every domain answer even when the whole universe agrees", () => {
+    // A radar radius larger than the play region: every candidate answers "yes",
+    // so "no" is realized by no station at all — yet it must still be offered so
+    // the seeker can record it (their candidate set may be incomplete).
+    const spec: StepSpec = { category: "radar", payload: 100, seeker: origin };
+    const buckets = eng.preview(spec);
+    const yes = buckets.find((b) => b.answer === true);
+    const no = buckets.find((b) => b.answer === false);
+    expect(yes!.survivors.length).toBe(ds.candidates.length);
+    expect(no).toBeDefined();
+    expect(no!.survivors.length).toBe(0);
+
+    eng.apply(spec, false);
+    expect(eng.survivors().length).toBe(0);
+  });
 });
 
 describe("EliminationEngine undo/redo", () => {

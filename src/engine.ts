@@ -6,7 +6,7 @@
 // Cumulative survivors = candidates that survive every applied step. History is
 // an undo/redo stack of steps.
 
-import { answerQuestion, thermometerAnswer, type Answer } from "./answers";
+import { answerQuestion, possibleAnswers, thermometerAnswer, type Answer } from "./answers";
 import type { Candidate, Dataset, LatLon, QuestionCategory, QuestionSpec } from "./types";
 
 export interface StepSpec {
@@ -94,6 +94,11 @@ export class EliminationEngine {
   preview(spec: StepSpec): PreviewBucket[] {
     const survivorIds = new Set(this.survivors().map((c) => c.id));
     const byAnswer = new Map<string, PreviewBucket>();
+    // Seed a bucket for every answer the question can produce, so options that no
+    // candidate realizes still appear (with zero survivors) and can be applied.
+    for (const ans of possibleAnswers(spec.category, spec.payload, this.ds)) {
+      byAnswer.set(answerKey(ans), { answer: ans, survivors: [] });
+    }
     for (const c of this.ds.candidates) {
       const ans = evaluate(this.ds, spec, c);
       const key = answerKey(ans);

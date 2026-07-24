@@ -74,7 +74,11 @@ async function main(): Promise<void> {
       },
     }),
   ]);
-  document.body.prepend(bar);
+  // The bar lives at the top of the #app flex column so the map sits *below* it
+  // instead of being overlaid by the fixed, full-viewport #app (which would paint
+  // the map over the bar). Re-flow Leaflet after the map box shrinks.
+  app.prepend(bar);
+  map.map.invalidateSize();
 
   const panelRoot = document.getElementById("panel")!;
   new Panels(store, map, panelRoot);

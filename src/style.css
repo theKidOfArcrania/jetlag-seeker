@@ -42,6 +42,8 @@ body {
 .statusbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  flex: none;
   gap: 8px;
   padding: calc(env(safe-area-inset-top) + 8px) 12px 8px;
   background: var(--ink);
