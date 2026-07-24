@@ -65,6 +65,10 @@ export class Panels {
     this.mount();
     this.store.onChange(() => this.onStoreChange());
     this.map.setMapClickHandler((loc) => this.onMapClick(loc));
+    // Keep the Places-tab category chips in sync with the map layer control.
+    this.map.onMatchingToggle(() => {
+      if (this.tab === "places") this.renderPlaces();
+    });
   }
 
   private mount(): void {
@@ -398,7 +402,31 @@ export class Panels {
               ]),
             ),
       ),
+      this.renderFeatureCategories(),
     );
+  }
+
+  /** Toggle map layers of matching-feature reference points (park, library, …). */
+  private renderFeatureCategories(): HTMLElement {
+    const cats = this.map.matchingCategories();
+    return el("div", { class: "feature-cats" }, [
+      el("div", { class: "field-label", text: "Reference features by category" }),
+      el("div", { class: "hint", text: "Show/hide matching-question feature points on the map." }),
+      el(
+        "div",
+        { class: "cat-chips" },
+        cats.map((c) =>
+          el("button", {
+            class: `chip ${c.visible ? "keep" : ""}`,
+            text: `${c.label} (${c.count})`,
+            onclick: () => {
+              this.map.setMatchingCategoryVisible(c.kind, !c.visible);
+              this.renderPlaces();
+            },
+          }),
+        ),
+      ),
+    ]);
   }
 
   private onMapClick(loc: LatLon): void {

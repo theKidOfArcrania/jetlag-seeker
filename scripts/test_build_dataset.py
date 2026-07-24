@@ -38,13 +38,17 @@ def test_dataset_has_required_shape() -> None:
 
 def test_boundary_is_wellformed() -> None:
     ds = load()
-    ring = ds["boundary"]
-    assert len(ring) >= 3, "city-limit boundary needs at least a triangle"
-    for pt in ring:
-        assert len(pt) == 2
-        lat, lon = pt
-        assert 47.0 < lat < 48.5, pt
-        assert -123.0 < lon < -121.5, pt
+    mp = ds["boundary"]  # multipolygon: polygons -> rings -> [lat, lon]
+    assert len(mp) >= 1, "expected at least one boundary polygon"
+    for poly in mp:
+        assert len(poly) >= 1, "each polygon needs an exterior ring"
+        for ring in poly:
+            assert len(ring) >= 3, "each ring needs at least a triangle"
+            for pt in ring:
+                assert len(pt) == 2
+                lat, lon = pt
+                assert 47.0 < lat < 48.5, pt
+                assert -123.0 < lon < -121.5, pt
 
 
 def test_candidates_are_wellformed() -> None:
@@ -96,7 +100,9 @@ def test_admin_tiers_nest_coarse_to_fine() -> None:
     city_names = {p["name"] for p in ap["city"]}
     nbhd_names = {p["name"] for p in ap["neighborhood"]}
     region_names = {p["name"] for p in ap["neighborhood_region"]}
-    assert len(city_names) == 1, city_names
+    assert len(city_names) >= 1, city_names
+    # City tier covers Seattle plus the Eastside extension cities.
+    assert {"Seattle", "Bellevue", "Redmond", "Mercer Island"} <= city_names, city_names
     # ~20 neighborhood districts, ~90 fine neighborhood regions.
     assert 10 <= len(nbhd_names) <= 40, len(nbhd_names)
     assert len(region_names) >= len(nbhd_names), (len(region_names), len(nbhd_names))
@@ -104,6 +110,11 @@ def test_admin_tiers_nest_coarse_to_fine() -> None:
     for name in region_names:
         district = name.split(" - ")[0]
         assert district in nbhd_names, name
+    # Eastside has no data finer than zips: each Bellevue/Redmond zip region and
+    # Mercer Island appear as their own neighborhood (but not as fine regions).
+    assert {"Bellevue 98004", "Redmond 98052", "Mercer Island"} <= nbhd_names, nbhd_names
+    for eastside in ("Bellevue 98004", "Redmond 98052", "Mercer Island"):
+        assert eastside not in region_names, eastside
 
 
 def test_transit_lines_wellformed() -> None:
@@ -144,25 +155,41 @@ def test_transit_lines_wellformed() -> None:
 
 
 def test_candidates_inside_boundary() -> None:
-    """Every candidate should fall inside the Seattle City Limit boundary."""
+    """Every candidate should fall inside the play-region boundary multipolygon."""
     ds = load()
-    ring = [(lat, lon) for lat, lon in ds["boundary"]]
+    mp = ds["boundary"]
 
     def inside(lat: float, lon: float) -> bool:
         hit = False
-        n = len(ring)
-        j = n - 1
-        for i in range(n):
-            yi, xi = ring[i]
-            yj, xj = ring[j]
-            if (yi > lat) != (yj > lat) and lon < (xj - xi) * (lat - yi) / (yj - yi) + xi:
-                hit = not hit
-            j = i
+        for poly in mp:
+            for ring in poly:
+                n = len(ring)
+                j = n - 1
+                for i in range(n):
+                    yi, xi = ring[i]
+                    yj, xj = ring[j]
+                    if (yi > lat) != (yj > lat) and lon < (xj - xi) * (lat - yi) / (yj - yi) + xi:
+                        hit = not hit
+                    j = i
         return hit
 
     outside = [c for c in ds["candidates"] if not inside(c["lat"], c["lon"])]
     ratio = 1 - len(outside) / len(ds["candidates"])
     assert ratio >= 0.98, f"only {ratio:.1%} of candidates inside the boundary ({len(outside)} outside)"
+
+
+def test_eastside_extension_included() -> None:
+    """The 2 Line + B Line extension reaches Bellevue/Redmond/Mercer Island."""
+    ds = load()
+    names = {c["name"] for c in ds["candidates"]}
+    assert "Mercer Island" in names, "Mercer Island 2 Line station should be a candidate"
+    # Redmond/Bellevue stations sit east of Lake Washington (lon > -122.22).
+    eastside = [c for c in ds["candidates"] if c["lon"] > -122.22]
+    assert len(eastside) >= 20, f"expected many Eastside candidates, got {len(eastside)}"
+    # But E-Line (Shoreline, north) and H-Line (Burien, south) stay excluded.
+    for c in ds["candidates"]:
+        assert c["lat"] < 47.74, f"unexpected far-north (Shoreline) candidate: {c['name']}"
+        assert c["lat"] > 47.48, f"unexpected far-south (Burien) candidate: {c['name']}"
 
 
 def _run() -> int:
@@ -176,6 +203,7 @@ def _run() -> int:
         test_admin_tiers_nest_coarse_to_fine,
         test_transit_lines_wellformed,
         test_candidates_inside_boundary,
+        test_eastside_extension_included,
     ]
     failed = 0
     for t in tests:

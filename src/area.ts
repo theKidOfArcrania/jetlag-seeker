@@ -46,20 +46,6 @@ export function candidateBounds(ds: Dataset): Bounds {
   return { minLat, minLon, maxLat, maxLon };
 }
 
-function ringBounds(ring: readonly [number, number][]): Bounds {
-  let minLat = Infinity;
-  let minLon = Infinity;
-  let maxLat = -Infinity;
-  let maxLon = -Infinity;
-  for (const [lat, lon] of ring) {
-    if (lat < minLat) minLat = lat;
-    if (lat > maxLat) maxLat = lat;
-    if (lon < minLon) minLon = lon;
-    if (lon > maxLon) maxLon = lon;
-  }
-  return { minLat, minLon, maxLat, maxLon };
-}
-
 // ---- Local projection (degrees <-> miles) -----------------------------------
 
 class Projection {
@@ -319,17 +305,21 @@ const CATEGORY_RANK: Record<string, number> = {
  * multipolygon of [lat, lon] rings with holes). Empty when no questions applied.
  */
 export function computeEliminatedArea(ds: Dataset, engine: EliminationEngine): LatLngMultiPolygon {
-  const boundaryRing = ds.boundary;
-  if (!boundaryRing || boundaryRing.length < 3) return [];
+  const boundary = ds.boundary;
+  if (!boundary || boundary.length === 0) return [];
   const steps = engine.history();
   if (steps.length === 0) return [];
 
-  const b = ringBounds(boundaryRing);
+  const b = multiPolygonBounds(boundary);
+  if (!Number.isFinite(b.minLat)) return [];
   const proj = new Projection((b.minLat + b.maxLat) / 2, (b.minLon + b.maxLon) / 2);
   const box = rectPolygon(b, proj);
 
-  const boundaryPoly: Polygon = [closeRing(boundaryRing.map(([lat, lon]) => proj.toXY(lat, lon)))];
-  let surviving: MultiPolygon = [boundaryPoly];
+  const boundaryMulti: MultiPolygon = boundary
+    .filter((poly) => poly.length > 0 && poly[0].length >= 3)
+    .map((poly) => poly.map((ring) => closeRing(ring.map(([lat, lon]) => proj.toXY(lat, lon)))));
+  if (boundaryMulti.length === 0) return [];
+  let surviving: MultiPolygon = boundaryMulti;
 
   const ordered = [...steps].sort(
     (s1, s2) => (CATEGORY_RANK[s1.category] ?? 9) - (CATEGORY_RANK[s2.category] ?? 9),
@@ -343,8 +333,26 @@ export function computeEliminatedArea(ds: Dataset, engine: EliminationEngine): L
   }
 
   const eliminated =
-    surviving.length === 0 ? [boundaryPoly] : polygonClipping.difference([boundaryPoly], surviving);
+    surviving.length === 0 ? boundaryMulti : polygonClipping.difference(boundaryMulti, surviving);
   return unproject(eliminated, proj);
+}
+
+function multiPolygonBounds(mp: readonly [number, number][][][]): Bounds {
+  let minLat = Infinity;
+  let minLon = Infinity;
+  let maxLat = -Infinity;
+  let maxLon = -Infinity;
+  for (const poly of mp) {
+    for (const ring of poly) {
+      for (const [lat, lon] of ring) {
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+        if (lon < minLon) minLon = lon;
+        if (lon > maxLon) maxLon = lon;
+      }
+    }
+  }
+  return { minLat, minLon, maxLat, maxLon };
 }
 
 function unproject(mp: MultiPolygon, proj: Projection): LatLngMultiPolygon {

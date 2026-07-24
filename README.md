@@ -11,8 +11,10 @@ where the hider could be — with live **preview**, **undo/redo**, a manual
 ## How it works
 
 - The candidate universe is every hider-network transit station inside the
-  **Seattle city limit** — the hiding region and network are taken from the
-  authoritative ["Jetlag the Seattle" Google My Maps](https://www.google.com/maps/d/viewer?mid=1-LHw6acRiIvcYsM6eGUBIMc2OeMi-0g).
+  **play region** — the **Seattle city limit plus the Eastside cities the 2 Line
+  and B Line reach (Bellevue, Redmond, Mercer Island)**. The hiding region and
+  network are taken from the authoritative ["Jetlag the Seattle" Google My Maps](https://www.google.com/maps/d/viewer?mid=1-LHw6acRiIvcYsM6eGUBIMc2OeMi-0g).
+  (Bellevue/Redmond come from the map's zip-code polygons; Mercer Island from OSM.)
   The network is **Link 1/2 + RapidRide B/C/D/E/G/H + the Seattle Streetcar**.
   POIs and coastline still come from OSM via [`jetlag_mapper`](../jetlag_mapper).
 - Each turn you pick a **question**, drag the **seeker marker (◉)** to where you
@@ -39,16 +41,20 @@ Photo and Tentacle questions are out of scope for automatic elimination.
   counts update live; apply "within" or "outside". The scale is non-linear (skewed
   toward short distances — **10 mi sits at the slider midpoint**).
 - **Map layers** (toggle via the layers control, top-right):
-  - **Seattle City Limit** — the hiding region boundary (on by default).
+  - **Play region** — the hiding-region boundary (Seattle + Eastside; on by default).
   - **Transit lines** — the hider network (Link 1/2 + RapidRide B/C/D/E/G/H +
     Seattle Streetcar), brand-colored (on by default).
   - **Regions** — the three matching tiers: city, neighborhood, and neighborhood
     region.
+  - **Features · _kind_** — the reference points behind each matching question
+    (parks, libraries, museums, …), one toggleable layer per category (off by
+    default). Also switchable from the **Places** tab's "Reference features by
+    category" chips.
   - **Eliminated area** — **exact analytic polygons** of every location currently
     ruled out by the applied questions (radar disks, thermometer half-planes,
     region polygons, matching Voronoi cells, measuring/coast disk-unions),
-    intersected and subtracted from the city boundary (computed lazily while the
-    layer is visible).
+    intersected and subtracted from the play-region boundary (computed lazily while
+    the layer is visible).
 - **Locate me**: the **📍 Locate** chip snaps the seeker marker to your real GPS
   location (requires HTTPS or localhost and location permission).
 - **Locations of interest**: add reference pins (tap map or at the seeker),

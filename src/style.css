@@ -216,6 +216,25 @@ body {
   color: var(--danger);
   border-color: #fecaca;
 }
+.chip.keep {
+  background: var(--keep);
+  border-color: var(--keep);
+  color: #fff;
+}
+
+.feature-cats {
+  margin-top: 14px;
+}
+.cat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.cat-chips .chip {
+  padding: 6px 10px;
+  font-size: 12px;
+}
 
 .loi-list,
 .history-list {

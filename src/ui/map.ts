@@ -17,6 +17,15 @@ const COLORS = {
   loiOff: "#9ca3af",
 };
 
+const FEATURE_COLORS = [
+  "#e11d48", "#7c3aed", "#0891b2", "#16a34a", "#d97706", "#db2777",
+  "#2563eb", "#65a30d", "#9333ea", "#0d9488", "#c2410c", "#4f46e5",
+];
+
+function featureLabel(kind: string): string {
+  return kind.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
 function divPin(emoji: string, color: string): L.DivIcon {
   return L.divIcon({
     className: "jl-pin",
@@ -41,6 +50,10 @@ export class MapView {
   private areaRenderer = L.canvas({ padding: 0.5 });
   private areaLayer = L.layerGroup();
   private radarCircle: L.Circle | null = null;
+  private featureRenderer = L.canvas({ padding: 0.5 });
+  private matchingLayers = new Map<string, L.LayerGroup>();
+  private matchingVisible = new Set<string>();
+  private matchingToggleCb: (() => void) | null = null;
 
   constructor(el: HTMLElement, start: LatLon, seeker: LatLon) {
     this.map = L.map(el, { zoomControl: true }).setView([start.lat, start.lon], 12);
@@ -169,18 +182,21 @@ export class MapView {
   }
 
   /**
-   * Build the toggleable overlay layers (Seattle City Limit boundary, admin
-   * regions, eliminated-area polygons, transit lines) and a Leaflet layers
-   * control. `onAreaVisible` fires whenever the eliminated-area layer is toggled
-   * so the caller can lazily compute the polygons.
+   * Build the toggleable overlay layers (play-region boundary, admin
+   * regions, eliminated-area polygons, transit lines, and one point layer per
+   * matching-feature category) and a Leaflet layers control. `onAreaVisible`
+   * fires whenever the eliminated-area layer is toggled so the caller can lazily
+   * compute the polygons.
    */
   setupOverlays(ds: Dataset, onAreaVisible: (visible: boolean) => void): void {
     const overlays: Record<string, L.Layer> = {};
 
-    // Seattle City Limit boundary (the play area); default ON.
+    // Play-region boundary (Seattle + Eastside extension); default ON. A
+    // multipolygon whose polygons each have an exterior ring followed by holes.
     const boundaryLayer = L.layerGroup();
-    if (ds.boundary && ds.boundary.length >= 3) {
-      L.polygon(ds.boundary as [number, number][], {
+    for (const poly of ds.boundary ?? []) {
+      if (poly.length === 0 || poly[0].length < 3) continue;
+      L.polygon(poly as [number, number][][], {
         color: "#111827",
         weight: 2,
         opacity: 0.7,
@@ -189,7 +205,7 @@ export class MapView {
       }).addTo(boundaryLayer);
     }
     boundaryLayer.addTo(this.map);
-    overlays["Seattle City Limit"] = boundaryLayer;
+    overlays["Play region"] = boundaryLayer;
 
     // Admin matching regions, one toggle per tier (coarse -> fine).
     const adminColors: Record<string, string> = {
@@ -241,14 +257,82 @@ export class MapView {
     // Eliminated-area polygons; computed lazily by the caller when toggled on.
     overlays["Eliminated area"] = this.areaLayer;
 
+    // Matching-feature reference points: one toggleable layer per matching kind
+    // (park, library, museum, …). All default OFF (parks alone are ~2800 points).
+    ds.config.matching_kinds.forEach((kind, i) => {
+      const feats = ds.features_by_kind[kind] ?? [];
+      if (feats.length === 0) return;
+      const color = FEATURE_COLORS[i % FEATURE_COLORS.length];
+      const grp = L.layerGroup();
+      for (const f of feats) {
+        L.circleMarker([f.lat, f.lon], {
+          renderer: this.featureRenderer,
+          radius: 4,
+          color: "#fff",
+          weight: 1,
+          fillColor: color,
+          fillOpacity: 0.9,
+        })
+          .bindTooltip(`${f.name || featureLabel(kind)} (${featureLabel(kind)})`)
+          .addTo(grp);
+      }
+      this.matchingLayers.set(kind, grp);
+      overlays[`Features · ${featureLabel(kind)} (${feats.length})`] = grp;
+    });
+
     L.control.layers(undefined, overlays, { collapsed: true, position: "topright" }).addTo(this.map);
 
     this.map.on("overlayadd", (e: L.LayersControlEvent) => {
       if (e.layer === this.areaLayer) onAreaVisible(true);
+      const kind = this.kindForLayer(e.layer);
+      if (kind) {
+        this.matchingVisible.add(kind);
+        this.matchingToggleCb?.();
+      }
     });
     this.map.on("overlayremove", (e: L.LayersControlEvent) => {
       if (e.layer === this.areaLayer) onAreaVisible(false);
+      const kind = this.kindForLayer(e.layer);
+      if (kind) {
+        this.matchingVisible.delete(kind);
+        this.matchingToggleCb?.();
+      }
     });
+  }
+
+  private kindForLayer(layer: L.Layer): string | null {
+    for (const [kind, grp] of this.matchingLayers) {
+      if (grp === layer) return kind;
+    }
+    return null;
+  }
+
+  /** Matching-feature categories with their point counts and current visibility. */
+  matchingCategories(): { kind: string; label: string; count: number; visible: boolean }[] {
+    const out: { kind: string; label: string; count: number; visible: boolean }[] = [];
+    for (const [kind, grp] of this.matchingLayers) {
+      const count = (grp.getLayers() as L.Layer[]).length;
+      out.push({ kind, label: featureLabel(kind), count, visible: this.matchingVisible.has(kind) });
+    }
+    return out;
+  }
+
+  /** Show/hide a matching-feature category layer (keeps the layer control in sync). */
+  setMatchingCategoryVisible(kind: string, visible: boolean): void {
+    const grp = this.matchingLayers.get(kind);
+    if (!grp) return;
+    if (visible) {
+      if (!this.map.hasLayer(grp)) this.map.addLayer(grp);
+      this.matchingVisible.add(kind);
+    } else {
+      if (this.map.hasLayer(grp)) this.map.removeLayer(grp);
+      this.matchingVisible.delete(kind);
+    }
+  }
+
+  /** Register a callback fired whenever a matching-feature layer is toggled. */
+  onMatchingToggle(cb: () => void): void {
+    this.matchingToggleCb = cb;
   }
 
   /** Draw the eliminated area as translucent red polygon(s) (even-odd holes). */

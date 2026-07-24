@@ -88,8 +88,10 @@ async function main() {
   server.close();
 
   const parse = (s) => parseInt(String(s).split("/")[0], 10);
-  const wantOverlays = ["Seattle City Limit", "Transit lines", "Eliminated area", "Regions · city"];
+  const wantOverlays = ["Play region", "Transit lines", "Eliminated area", "Regions · city"];
   const overlaysOk = wantOverlays.every((l) => overlayLabels.includes(l));
+  // Per-category matching-feature layers, e.g. "Features · Park (2822)".
+  const featureLayerOk = overlayLabels.some((l) => /^Features · /.test(l));
   const ok =
     errors.length === 0 &&
     candidateMarkers > 100 &&
@@ -98,7 +100,8 @@ async function main() {
     parse(afterUndo) === parse(initialCount) &&
     parse(afterRedo) === parse(afterCount) &&
     bucketCount >= 1 &&
-    overlaysOk;
+    overlaysOk &&
+    featureLayerOk;
 
   console.log(JSON.stringify({ initialCount, afterCount, candidateMarkers, historyRows, afterUndo, afterRedo, bucketCount, overlayLabels, errors }, null, 2));
   if (!ok) {

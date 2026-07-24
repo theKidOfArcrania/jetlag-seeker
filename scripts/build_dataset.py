@@ -26,7 +26,12 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.request import urlopen
 
-from shapely.geometry import LineString
+from shapely.geometry import LineString, MultiPolygon
+from shapely.geometry import Point as ShapelyPoint
+from shapely.geometry import Polygon as ShapelyPolygon
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
+from shapely.prepared import prep
 
 from jetlag.config import DEFAULT_CONFIG, GameConfig
 from jetlag.osm.features import fetch_all
@@ -62,6 +67,20 @@ NETWORK_FOLDERS = (
 )
 CITY_LIMIT_FOLDER = "Seattle City Limit"
 NEIGHBORHOODS_FOLDER = "Seattle Neighborhoods"
+
+# Eastside extension: the play region also covers the cities the 2 Line + B Line
+# reach (Bellevue, Redmond, Mercer Island). Bellevue/Redmond boundaries come from
+# the KML's zip-code polygons; Mercer Island (absent from the KML) comes from OSM.
+EASTSIDE_ZIP_FOLDER = "Bellevue/Redmond Zip Codes"
+CITY_BY_ZIP = {
+    "98004": "Bellevue",
+    "98005": "Bellevue",
+    "98007": "Bellevue",
+    "98008": "Bellevue",
+    "98052": "Redmond",
+}
+MERCER_ISLAND_NAME = "Mercer Island"  # OSM admin_level=8 city name
+OSM_CITY_ADMIN_LEVEL = 8
 
 # Brand styling for each route family (color, GTFS route_type).
 LINE_GREEN = "#28813F"
@@ -152,23 +171,123 @@ def _placemark_geoms(pm: ET.Element, tag: str) -> list[list[tuple[float, float]]
     return [_parse_coords(c.text) for c in pm.findall(f".//k:{tag}//k:coordinates", KML_NS) if c.text]
 
 
-def _point_in_ring(lat: float, lon: float, ring: list[tuple[float, float]]) -> bool:
-    inside = False
-    n = len(ring)
-    j = n - 1
-    for i in range(n):
-        yi, xi = ring[i]
-        yj, xj = ring[j]
-        if ((yi > lat) != (yj > lat)) and (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi):
-            inside = not inside
-        j = i
-    return inside
-
-
 def parse_boundary(doc: ET.Element) -> list[tuple[float, float]]:
     pm = _folder(doc, CITY_LIMIT_FOLDER).find("k:Placemark", KML_NS)
     ring = _placemark_geoms(pm, "Polygon")[0]
     return ring
+
+
+# ---- Play region (Seattle + Eastside extension) -----------------------------
+
+
+def _ring_to_shapely(ring: list[tuple[float, float]]) -> ShapelyPolygon:
+    """(lat, lon) ring -> shapely Polygon in (x=lon, y=lat) coords."""
+    return ShapelyPolygon([(lon, lat) for lat, lon in ring])
+
+
+def _iter_polygons(geom: BaseGeometry):
+    """Yield each simple Polygon of a Polygon/MultiPolygon geometry."""
+    if isinstance(geom, MultiPolygon):
+        yield from geom.geoms
+    elif isinstance(geom, ShapelyPolygon):
+        yield geom
+    # ignore empty / non-polygonal geometries
+
+
+def _shapely_to_latlon_multipolygon(
+    geom: BaseGeometry, tol: float, min_hole_area: float = 1e-5
+) -> list[list[list[list[float]]]]:
+    """Convert a (Multi)Polygon to a simplified geographic multipolygon:
+    polygons -> rings (exterior first, then holes) -> [lat, lon]. Sub-threshold
+    holes (slivers left where zip polygons don't perfectly tile) are dropped."""
+    out: list[list[list[list[float]]]] = []
+    for poly in _iter_polygons(geom):
+        rings = [poly.exterior] + [r for r in poly.interiors if ShapelyPolygon(r).area >= min_hole_area]
+        latlon_rings = [
+            _simplify_ring([(lat, lon) for lon, lat in ring.coords], tol) for ring in rings
+        ]
+        out.append(latlon_rings)
+    return out
+
+
+def _reconstruct_ring(points: list[tuple[float, float]]) -> ShapelyPolygon:
+    """OSM relation boundaries arrive as unordered concatenated ways, so build a
+    clean ring by nearest-neighbour chaining the (deduped) vertices. Falls back to
+    the convex hull if the chain self-intersects."""
+    from shapely.geometry import MultiPoint
+
+    pts = list(dict.fromkeys(points))  # dedup, preserve first-seen order
+    remaining = pts[:]
+    chain = [remaining.pop(0)]
+    while remaining:
+        la, lo = chain[-1]
+        j = min(range(len(remaining)), key=lambda k: (remaining[k][0] - la) ** 2 + (remaining[k][1] - lo) ** 2)
+        chain.append(remaining.pop(j))
+    poly = ShapelyPolygon([(lon, lat) for lat, lon in chain]).buffer(0)
+    if poly.geom_type != "Polygon" or poly.is_empty:
+        poly = MultiPoint([(lon, lat) for lat, lon in pts]).convex_hull
+    return poly
+
+
+def _eastside_zip_polygons(doc: ET.Element) -> list[tuple[str, str, ShapelyPolygon]]:
+    """Return (city, zip_code, polygon) for each Bellevue/Redmond zip placemark
+    polygon (a placemark may hold several polygons)."""
+    out: list[tuple[str, str, ShapelyPolygon]] = []
+    for pm in _folder(doc, EASTSIDE_ZIP_FOLDER).findall("k:Placemark", KML_NS):
+        zip_code = (_txt(pm, "name") or "").strip()
+        city = CITY_BY_ZIP.get(zip_code)
+        if not city:
+            continue
+        for ring in _placemark_geoms(pm, "Polygon"):
+            out.append((city, zip_code, _ring_to_shapely(ring).buffer(0)))
+    return out
+
+
+def _mercer_island_polygon(ctx) -> BaseGeometry | None:
+    """Mercer Island's boundary from OSM (absent from the KML); reassembled from
+    the relation's unordered ways into a clean ring."""
+    for name, ring in ctx.admin_polygons.get(OSM_CITY_ADMIN_LEVEL, []):
+        if name == MERCER_ISLAND_NAME and len(ring) >= 4:
+            return _reconstruct_ring(ring)
+    return None
+
+
+def build_city_polygons(doc: ET.Element, ctx) -> list[tuple[str, BaseGeometry]]:
+    """Return (city_name, shapely geometry) for every city in the play region:
+    Seattle (KML city limit), Bellevue + Redmond (KML zip polygons unioned per
+    city), and Mercer Island (OSM, reassembled)."""
+    cities: list[tuple[str, BaseGeometry]] = [("Seattle", _ring_to_shapely(parse_boundary(doc)).buffer(0))]
+
+    by_city: dict[str, list[ShapelyPolygon]] = {}
+    for city, _zip, poly in _eastside_zip_polygons(doc):
+        by_city.setdefault(city, []).append(poly)
+    for city, polys in by_city.items():
+        cities.append((city, unary_union(polys)))
+
+    mercer = _mercer_island_polygon(ctx)
+    if mercer is not None:
+        cities.append((MERCER_ISLAND_NAME, mercer))
+
+    return cities
+
+
+def build_eastside_neighborhoods(doc: ET.Element, ctx) -> list[tuple[str, BaseGeometry]]:
+    """Finer 'neighborhood'-tier entries for the Eastside: each Bellevue/Redmond
+    zip code on its own (e.g. "Bellevue 98004"), plus Mercer Island as a single
+    neighborhood. (The Eastside has no data finer than zips.)"""
+    by_zip: dict[tuple[str, str], list[ShapelyPolygon]] = {}
+    for city, zip_code, poly in _eastside_zip_polygons(doc):
+        by_zip.setdefault((city, zip_code), []).append(poly)
+
+    out: list[tuple[str, BaseGeometry]] = []
+    for (city, zip_code), polys in sorted(by_zip.items()):
+        out.append((f"{city} {zip_code}", unary_union(polys)))
+
+    mercer = _mercer_island_polygon(ctx)
+    if mercer is not None:
+        out.append((MERCER_ISLAND_NAME, mercer))
+
+    return out
 
 
 def _line_meta(folder_name: str, ls_name: str) -> tuple[str, str, int]:
@@ -213,9 +332,10 @@ def _clean_station_name(name: str) -> str:
     return name
 
 
-def parse_candidates(doc: ET.Element, boundary: list[tuple[float, float]]) -> list[dict]:
-    """Every hider-network station Point inside the city limit, deduped by name +
+def parse_candidates(doc: ET.Element, region: BaseGeometry) -> list[dict]:
+    """Every hider-network station Point inside the play region, deduped by name +
     proximity (collapsing opposite-direction and multi-bay stops)."""
+    region_prepared = prep(region)
     raw: list[tuple[str, float, float]] = []
     for folder_name in NETWORK_FOLDERS:
         for pm in _folder(doc, folder_name).findall("k:Placemark", KML_NS):
@@ -223,7 +343,7 @@ def parse_candidates(doc: ET.Element, boundary: list[tuple[float, float]]) -> li
             if not pts:
                 continue
             lat, lon = pts[0][0]  # first (and only) coordinate of the Point
-            if not _point_in_ring(lat, lon, boundary):
+            if not region_prepared.covers(ShapelyPoint(lon, lat)):
                 continue
             raw.append((_clean_station_name(_txt(pm, "name") or ""), lat, lon))
 
@@ -257,28 +377,61 @@ def parse_candidates(doc: ET.Element, boundary: list[tuple[float, float]]) -> li
     return candidates
 
 
-def parse_admin_regions(doc: ET.Element, boundary: list[tuple[float, float]]) -> dict[str, list[dict]]:
-    """Three nested matching tiers from the map: city (the whole Seattle City Limit),
-    neighborhood (the 20 'District' groupings), and neighborhood_region (the 94 fine
-    'District - Neighborhood' polygons)."""
+def parse_admin_regions(
+    doc: ET.Element,
+    city_polygons: list[tuple[str, BaseGeometry]],
+    eastside_neighborhoods: list[tuple[str, BaseGeometry]],
+) -> dict[str, list[dict]]:
+    """Three nested matching tiers: city (every city in the play region — Seattle
+    plus the Eastside cities), neighborhood (the ~20 Seattle 'District' outlines
+    formed by unioning the fine polygons, plus one entry per Eastside zip region),
+    and neighborhood_region (the 94 fine 'District - Neighborhood' polygons). The
+    Eastside has no data finer than zips, so it appears only in the city and
+    neighborhood tiers."""
     neigh_pms = _folder(doc, NEIGHBORHOODS_FOLDER).findall("k:Placemark", KML_NS)
 
-    regions: list[dict] = []  # {"district": str, "full": str, "ring": [...]}
+    # Simplify each fine region ONCE, then reuse those exact rings for both the
+    # neighborhood_region tier and (unioned per district) the neighborhood tier.
+    # Building the district outline from the same simplified polygons guarantees
+    # neighborhood_region is nested inside neighborhood (no edge leakage from
+    # independent simplification).
+    regions: list[dict] = []  # {"district", "full", "ring" (simplified [lat, lon])}
+    by_district: dict[str, list[ShapelyPolygon]] = {}
     for pm in neigh_pms:
         full = _txt(pm, "name") or ""
         district = full.split(" - ", 1)[0].strip() if " - " in full else full.strip()
         for ring in _placemark_geoms(pm, "Polygon"):
-            regions.append({"district": district, "full": full, "ring": ring})
+            simp = _simplify_ring(ring, ADMIN_SIMPLIFY_TOL)
+            regions.append({"district": district, "full": full, "ring": simp})
+            by_district.setdefault(district, []).append(
+                ShapelyPolygon([(lon, lat) for lat, lon in simp]).buffer(0)
+            )
 
-    city = [{"name": "Seattle", "ring": _simplify_ring(boundary, ADMIN_SIMPLIFY_TOL)}]
-    # District-level: same fine polygons, renamed to their district so point-in-polygon
-    # returns the coarse grouping ("same neighborhood?" == same district).
-    neighborhood = [
-        {"name": r["district"], "ring": _simplify_ring(r["ring"], ADMIN_SIMPLIFY_TOL)} for r in regions
-    ]
-    neighborhood_region = [
-        {"name": r["full"], "ring": _simplify_ring(r["ring"], ADMIN_SIMPLIFY_TOL)} for r in regions
-    ]
+    # City tier: one entry per exterior ring of each city (MultiPolygons split).
+    city: list[dict] = []
+    for name, geom in city_polygons:
+        for poly in _iter_polygons(geom):
+            ring = [(lat, lon) for lon, lat in poly.exterior.coords]
+            city.append({"name": name, "ring": _simplify_ring(ring, ADMIN_SIMPLIFY_TOL)})
+
+    # Neighborhood tier: dissolve the fine polygons into true district outlines. A
+    # district may union into a MultiPolygon -> one entry per exterior ring. The
+    # union is NOT re-simplified so it exactly covers its fine regions.
+    neighborhood: list[dict] = []
+    for district in sorted(by_district):
+        merged = unary_union(by_district[district])
+        for poly in _iter_polygons(merged):
+            ring = [[_round(lat), _round(lon)] for lon, lat in poly.exterior.coords]
+            neighborhood.append({"name": district, "ring": ring})
+
+    # Eastside has no data finer than zips: add each zip region (+ Mercer Island)
+    # as its own neighborhood so Eastside stations match at this tier too.
+    for name, geom in eastside_neighborhoods:
+        for poly in _iter_polygons(geom):
+            ring = [[_round(lat), _round(lon)] for lon, lat in poly.exterior.coords]
+            neighborhood.append({"name": name, "ring": ring})
+
+    neighborhood_region = [{"name": r["full"], "ring": r["ring"]} for r in regions]
     return {
         "city": city,
         "neighborhood": neighborhood,
@@ -291,15 +444,23 @@ def build(cfg: GameConfig) -> dict:
     doc = load_kml()
     print("Parsing authoritative game map (KML)...")
 
-    boundary = parse_boundary(doc)
-    candidates = parse_candidates(doc, boundary)
-    print(f"Candidate stations (inside city limit): {len(candidates)}")
+    print("Loading OSM context (POIs + coastline) ...")
+    ctx = fetch_all()
+
+    # Play region = Seattle City Limit unioned with the Eastside cities reachable
+    # via the 2 Line + B Line (Bellevue, Redmond, Mercer Island).
+    city_polygons = build_city_polygons(doc, ctx)
+    print("Play-region cities: " + ", ".join(name for name, _ in city_polygons))
+    region = unary_union([g for _, g in city_polygons])
+
+    candidates = parse_candidates(doc, region)
+    print(f"Candidate stations (inside play region): {len(candidates)}")
 
     transit_lines = parse_transit_lines(doc)
     print(f"Transit lines (hider network): {len(transit_lines)} "
           f"({', '.join(l['name'] for l in transit_lines)})")
 
-    admin_polygons = parse_admin_regions(doc, boundary)
+    admin_polygons = parse_admin_regions(doc, city_polygons, build_eastside_neighborhoods(doc, ctx))
     print("Admin tiers: " + ", ".join(f"{k}={len(v)}" for k, v in admin_polygons.items()))
 
     # Start station (Symphony) from the parsed candidates; fall back to the known
@@ -307,8 +468,6 @@ def build(cfg: GameConfig) -> dict:
     start = next((c for c in candidates if c["name"].lower().startswith("symphony")), None)
     start_lat, start_lon = (start["lat"], start["lon"]) if start else (47.607246, -122.335754)
 
-    print("Loading OSM context (POIs + coastline) ...")
-    ctx = fetch_all()
     features_by_kind = {
         kind: [
             {"id": f.osm_id, "name": f.name, "lat": _round(f.lat), "lon": _round(f.lon)}
@@ -348,7 +507,7 @@ def build(cfg: GameConfig) -> dict:
         "features_by_kind": features_by_kind,
         "admin_polygons": admin_polygons,
         "coastlines": coastlines,
-        "boundary": _simplify_ring(boundary, ADMIN_SIMPLIFY_TOL),
+        "boundary": _shapely_to_latlon_multipolygon(region, ADMIN_SIMPLIFY_TOL),
         "question_catalog": catalog,
         "transit_lines": transit_lines,
     }

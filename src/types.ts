@@ -55,7 +55,9 @@ export interface Dataset {
   features_by_kind: Record<string, Feature[]>;
   admin_polygons: Record<string, AdminPolygon[]>;
   coastlines: [number, number][][];
-  boundary: [number, number][]; // Seattle City Limit ring [lat, lon]
+  // Play-region boundary as a multipolygon: polygons -> rings (exterior first,
+  // then holes) -> [lat, lon]. Covers Seattle + the Eastside extension.
+  boundary: [number, number][][][];
   question_catalog: QuestionSpec[];
   transit_lines: TransitLine[];
 }
