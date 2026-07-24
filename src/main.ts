@@ -24,25 +24,10 @@ async function main(): Promise<void> {
   const map = new MapView(mapEl, { lat: ds.config.start_lat, lon: ds.config.start_lon }, store.seeker);
 
   // Top status bar
-  let showEliminated = true;
   const countEl = el("span", { class: "count" });
   const bar = el("div", { class: "statusbar" }, [
     el("span", { class: "brand", text: "Jet Lag · Seeker" }),
     countEl,
-    el("button", {
-      class: "chip",
-      text: "Fit",
-      onclick: () => map.fitToSurvivors(store.engine.survivors()),
-    }),
-    el("button", {
-      class: "chip toggle",
-      text: "Eliminated ✓",
-      onclick: (e: Event) => {
-        showEliminated = !showEliminated;
-        (e.target as HTMLElement).textContent = showEliminated ? "Eliminated ✓" : "Eliminated ✕";
-        renderMap();
-      },
-    }),
     el("button", {
       class: "chip",
       text: "📍 Locate",
@@ -101,7 +86,7 @@ async function main(): Promise<void> {
   function renderMap(): void {
     const survivors = store.engine.survivors();
     const eliminated = store.engine.eliminated();
-    map.renderCandidates(survivors, eliminated, showEliminated);
+    map.renderCandidates(survivors, eliminated);
     map.renderLois(store.lois);
     map.setSeeker(store.seeker);
     countEl.textContent = `${survivors.length}/${ds.candidates.length} left`;

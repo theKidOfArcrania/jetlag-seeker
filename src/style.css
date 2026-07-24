@@ -188,6 +188,14 @@ body {
   font-size: 15px;
   font-weight: 600;
 }
+/* Keep the Ask apply button reachable when the preview overflows the sheet. */
+#ask-preview > .apply {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin-top: 2px;
+  box-shadow: 0 -10px 14px -6px var(--panel);
+}
 .apply:disabled {
   opacity: 0.45;
 }

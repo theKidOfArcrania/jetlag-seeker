@@ -143,18 +143,16 @@ export class MapView {
     }
   }
 
-  renderCandidates(survivors: Candidate[], eliminated: Candidate[], showEliminated: boolean): void {
+  renderCandidates(survivors: Candidate[], eliminated: Candidate[]): void {
     this.candidateLayer.clearLayers();
-    if (showEliminated) {
-      for (const c of eliminated) {
-        L.circleMarker([c.lat, c.lon], {
-          radius: 3,
-          color: COLORS.eliminated,
-          weight: 0,
-          fillColor: COLORS.eliminated,
-          fillOpacity: 0.5,
-        }).addTo(this.candidateLayer);
-      }
+    for (const c of eliminated) {
+      L.circleMarker([c.lat, c.lon], {
+        radius: 3,
+        color: COLORS.eliminated,
+        weight: 0,
+        fillColor: COLORS.eliminated,
+        fillOpacity: 0.5,
+      }).addTo(this.candidateLayer);
     }
     for (const c of survivors) {
       L.circleMarker([c.lat, c.lon], {
@@ -448,11 +446,5 @@ export class MapView {
       ],
       { color: COLORS.seekerTo, weight: 3, dashArray: "6 6" },
     ).addTo(this.previewLayer);
-  }
-
-  fitToSurvivors(survivors: Candidate[]): void {
-    if (survivors.length === 0) return;
-    const bounds = L.latLngBounds(survivors.map((c) => [c.lat, c.lon] as [number, number]));
-    this.map.fitBounds(bounds.pad(0.15));
   }
 }
