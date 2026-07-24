@@ -8,7 +8,6 @@ export interface Candidate {
   name: string;
   lat: number;
   lon: number;
-  travel_min: number;
 }
 
 export interface Feature {
@@ -47,7 +46,7 @@ export interface DatasetConfig {
   thermometer_bands_mi: number[];
   measuring_kinds: string[];
   matching_kinds: string[];
-  admin_levels: number[];
+  admin_regions: string[]; // ordered coarse -> fine: ["city","neighborhood","neighborhood_region"]
 }
 
 export interface Dataset {
@@ -56,17 +55,18 @@ export interface Dataset {
   features_by_kind: Record<string, Feature[]>;
   admin_polygons: Record<string, AdminPolygon[]>;
   coastlines: [number, number][][];
+  boundary: [number, number][]; // Seattle City Limit ring [lat, lon]
   question_catalog: QuestionSpec[];
   transit_lines: TransitLine[];
 }
 
-// A hider-allowed transit line (Link 1/2, RapidRide A-H) for the map overlay.
+// A hider-allowed transit line (Link 1/2, RapidRide B/C/D/E/G/H, Streetcar) for
+// the map overlay. A line may have several segments (both directions / branches).
 export interface TransitLine {
-  short_name: string;
-  long_name: string;
-  route_type: number; // 0 = light rail, 3 = bus (RapidRide)
+  name: string;
+  route_type: number; // 0 = light rail / streetcar, 3 = RapidRide bus
   color: string; // "#RRGGBB"
-  points: [number, number][]; // [lat, lon] polyline
+  segments: [number, number][][]; // list of [lat, lon] polylines
 }
 
 // A user-added reference pin ("location of interest").

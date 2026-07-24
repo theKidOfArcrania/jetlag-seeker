@@ -195,14 +195,19 @@ export class Panels {
         ),
       );
     } else if (this.category === "admin") {
-      if (typeof this.param !== "number" || !cfg.admin_levels.includes(this.param)) this.param = cfg.admin_levels[0];
-      const labels: Record<number, string> = { 6: "County", 8: "City / town", 10: "Neighborhood" };
+      const regions = cfg.admin_regions;
+      if (typeof this.param !== "string" || !regions.includes(this.param)) this.param = regions[0];
+      const labels: Record<string, string> = {
+        city: "City",
+        neighborhood: "Neighborhood",
+        neighborhood_region: "Neighborhood region",
+      };
       wrap.append(
         el("label", { class: "field-label", text: "Region level" }),
         el(
           "select",
-          { class: "select", onchange: (e: Event) => { this.param = Number((e.target as HTMLSelectElement).value); this.renderPreview(); } },
-          cfg.admin_levels.map((lvl) => el("option", { value: lvl, selected: lvl === this.param, text: labels[lvl] ?? `Level ${lvl}` })),
+          { class: "select", onchange: (e: Event) => { this.param = (e.target as HTMLSelectElement).value; this.renderPreview(); } },
+          regions.map((key) => el("option", { value: key, selected: key === this.param, text: labels[key] ?? titleCase(key) })),
         ),
       );
     }

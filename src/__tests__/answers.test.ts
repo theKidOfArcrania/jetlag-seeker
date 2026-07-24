@@ -14,11 +14,15 @@ describe("answer parity with jetlag_mapper (Python oracle)", () => {
   const ds = loadDatasetSync();
   const fx = loadParityFixture();
 
-  it("has a fixture aligned with the dataset question catalog", () => {
-    expect(fx.questions.length).toBe(ds.question_catalog.length);
+  it("has a fixture aligned with the dataset question catalog (excluding admin)", () => {
+    // Admin questions use a KML-sourced region model that the Python oracle
+    // can't consume, so they're excluded from the parity fixture and covered by
+    // dedicated unit tests below.
+    const nonAdmin = ds.question_catalog.filter((q) => q.category !== "admin");
+    expect(fx.questions.length).toBe(nonAdmin.length);
     fx.questions.forEach((q, i) => {
-      expect(q.category).toBe(ds.question_catalog[i].category);
-      expect(q.name).toBe(ds.question_catalog[i].name);
+      expect(q.category).toBe(nonAdmin[i].category);
+      expect(q.name).toBe(nonAdmin[i].name);
     });
   });
 

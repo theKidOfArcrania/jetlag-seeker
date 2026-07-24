@@ -2,7 +2,7 @@ import "leaflet/dist/leaflet.css";
 import "./style.css";
 import { fetchDataset } from "./loadDataset";
 import { MapView } from "./ui/map";
-import { computeAreaGrid } from "./area";
+import { computeEliminatedArea } from "./area";
 import { Store } from "./ui/store";
 import { Panels } from "./ui/panels";
 import { el } from "./ui/dom";
@@ -43,15 +43,45 @@ async function main(): Promise<void> {
         renderMap();
       },
     }),
+    el("button", {
+      class: "chip",
+      text: "📍 Locate",
+      onclick: (e: Event) => {
+        const btn = e.target as HTMLButtonElement;
+        if (!("geolocation" in navigator)) {
+          alert("Geolocation is not available in this browser.");
+          return;
+        }
+        const prev = btn.textContent;
+        btn.textContent = "Locating…";
+        btn.disabled = true;
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const loc = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+            store.setSeeker(loc);
+            map.setSeeker(loc);
+            map.panTo(loc);
+            btn.textContent = prev;
+            btn.disabled = false;
+          },
+          (err) => {
+            alert(`Could not get your location: ${err.message}`);
+            btn.textContent = prev;
+            btn.disabled = false;
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+        );
+      },
+    }),
   ]);
   document.body.prepend(bar);
 
   const panelRoot = document.getElementById("panel")!;
   new Panels(store, map, panelRoot);
 
-  // Toggleable overlays: admin regions, transit lines, and the eliminated-area
-  // grid. The grid is expensive (thousands of cells), so it is only computed
-  // when its layer is visible, and recomputed on store changes while visible.
+  // Toggleable overlays: boundary, admin regions, transit lines, and the
+  // eliminated area. The area is computed analytically (exact per-question
+  // polygons) only while its layer is visible, and recomputed on store changes.
   let areaVisible = false;
   map.setupOverlays(ds, (visible) => {
     areaVisible = visible;
@@ -61,7 +91,7 @@ async function main(): Promise<void> {
 
   function renderArea(): void {
     if (!areaVisible) return;
-    map.renderArea(computeAreaGrid(ds, store.engine));
+    map.renderArea(computeEliminatedArea(ds, store.engine));
   }
 
   function renderMap(): void {

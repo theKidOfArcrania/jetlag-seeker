@@ -3,7 +3,6 @@
 // overlays (radar circle, thermometer line, per-answer shading).
 
 import L from "leaflet";
-import type { AreaCell } from "../area";
 import type { Candidate, Dataset, LatLon, Loi } from "../types";
 
 const COLORS = {
@@ -90,6 +89,11 @@ export class MapView {
     this.seekerMarker.setLatLng([loc.lat, loc.lon]);
   }
 
+  /** Recenter the map on a location (keeps current zoom, or zooms in a bit). */
+  panTo(loc: LatLon): void {
+    this.map.setView([loc.lat, loc.lon], Math.max(this.map.getZoom(), 13));
+  }
+
   /** Show/refresh a secondary marker for the thermometer destination. */
   setSeekerTo(loc: LatLon | null): void {
     if (!loc) {
@@ -142,7 +146,7 @@ export class MapView {
         fillColor: COLORS.survivor,
         fillOpacity: 0.9,
       })
-        .bindTooltip(`${c.name} · ${c.travel_min.toFixed(0)} min`)
+        .bindTooltip(c.name)
         .addTo(this.candidateLayer);
     }
   }
@@ -165,29 +169,44 @@ export class MapView {
   }
 
   /**
-   * Build the toggleable overlay layers (admin regions, eliminated-area grid,
-   * transit lines) and a Leaflet layers control. `onAreaVisible` fires whenever
-   * the eliminated-area layer is toggled so the caller can lazily compute the grid.
+   * Build the toggleable overlay layers (Seattle City Limit boundary, admin
+   * regions, eliminated-area polygons, transit lines) and a Leaflet layers
+   * control. `onAreaVisible` fires whenever the eliminated-area layer is toggled
+   * so the caller can lazily compute the polygons.
    */
   setupOverlays(ds: Dataset, onAreaVisible: (visible: boolean) => void): void {
     const overlays: Record<string, L.Layer> = {};
 
-    // Admin regions, one toggle per level.
+    // Seattle City Limit boundary (the play area); default ON.
+    const boundaryLayer = L.layerGroup();
+    if (ds.boundary && ds.boundary.length >= 3) {
+      L.polygon(ds.boundary as [number, number][], {
+        color: "#111827",
+        weight: 2,
+        opacity: 0.7,
+        fill: false,
+        interactive: false,
+      }).addTo(boundaryLayer);
+    }
+    boundaryLayer.addTo(this.map);
+    overlays["Seattle City Limit"] = boundaryLayer;
+
+    // Admin matching regions, one toggle per tier (coarse -> fine).
     const adminColors: Record<string, string> = {
-      "6": "#b45309",
-      "8": "#7c3aed",
-      "10": "#0e7490",
+      city: "#b45309",
+      neighborhood: "#7c3aed",
+      neighborhood_region: "#0e7490",
     };
     const adminLabels: Record<string, string> = {
-      "6": "Admin · county (L6)",
-      "8": "Admin · city (L8)",
-      "10": "Admin · neighborhood (L10)",
+      city: "Regions · city",
+      neighborhood: "Regions · neighborhood",
+      neighborhood_region: "Regions · neighborhood region",
     };
-    for (const level of ds.config.admin_levels.map(String)) {
-      const polys = ds.admin_polygons[level];
+    for (const key of ds.config.admin_regions) {
+      const polys = ds.admin_polygons[key];
       if (!polys || polys.length === 0) continue;
       const grp = L.layerGroup();
-      const color = adminColors[level] ?? "#6b7280";
+      const color = adminColors[key] ?? "#6b7280";
       for (const poly of polys) {
         L.polygon(poly.ring as [number, number][], {
           color,
@@ -199,25 +218,27 @@ export class MapView {
           .bindTooltip(poly.name, { sticky: true })
           .addTo(grp);
       }
-      overlays[adminLabels[level] ?? `Admin · level ${level}`] = grp;
+      overlays[adminLabels[key] ?? `Regions · ${key}`] = grp;
     }
 
-    // Transit lines (hider network), colored by brand; default ON.
+    // Transit lines (hider network), colored by brand; default ON. Each line may
+    // have several segments (both directions / branches).
     const transitLayer = L.layerGroup();
     for (const line of ds.transit_lines) {
-      const label = line.long_name ? `${line.short_name} · ${line.long_name}` : line.short_name;
-      L.polyline(line.points as [number, number][], {
-        color: line.color,
-        weight: line.route_type === 0 ? 5 : 4,
-        opacity: 0.85,
-      })
-        .bindTooltip(label, { sticky: true })
-        .addTo(transitLayer);
+      for (const seg of line.segments) {
+        L.polyline(seg as [number, number][], {
+          color: line.color,
+          weight: line.route_type === 0 ? 5 : 4,
+          opacity: 0.85,
+        })
+          .bindTooltip(line.name, { sticky: true })
+          .addTo(transitLayer);
+      }
     }
     transitLayer.addTo(this.map);
     overlays["Transit lines"] = transitLayer;
 
-    // Eliminated-area grid; computed lazily by the caller when toggled on.
+    // Eliminated-area polygons; computed lazily by the caller when toggled on.
     overlays["Eliminated area"] = this.areaLayer;
 
     L.control.layers(undefined, overlays, { collapsed: true, position: "topright" }).addTo(this.map);
@@ -230,24 +251,28 @@ export class MapView {
     });
   }
 
-  /** Draw the eliminated-area grid cells (red, translucent) on a canvas renderer. */
-  renderArea(cells: AreaCell[]): void {
+  /** Draw the eliminated area as translucent red polygon(s) (even-odd holes). */
+  /**
+   * Draw the eliminated area as translucent red polygons. `polygons` is a
+   * multipolygon: each entry is an array of rings ([lat, lon] pairs) whose first
+   * ring is the outer boundary and the rest are holes — Leaflet renders the
+   * holes natively.
+   */
+  renderArea(polygons: [number, number][][][]): void {
     this.areaLayer.clearLayers();
-    for (const cell of cells) {
-      if (!cell.eliminated) continue;
-      L.rectangle(
-        [
-          [cell.south, cell.west],
-          [cell.north, cell.east],
-        ],
-        {
-          renderer: this.areaRenderer,
-          stroke: false,
-          fillColor: "#dc2626",
-          fillOpacity: 0.22,
-          interactive: false,
-        },
-      ).addTo(this.areaLayer);
+    if (polygons.length === 0) return;
+    for (const rings of polygons) {
+      if (rings.length === 0) continue;
+      L.polygon(rings, {
+        renderer: this.areaRenderer,
+        stroke: true,
+        color: "#b91c1c",
+        weight: 1,
+        opacity: 0.5,
+        fillColor: "#dc2626",
+        fillOpacity: 0.25,
+        interactive: false,
+      }).addTo(this.areaLayer);
     }
   }
 

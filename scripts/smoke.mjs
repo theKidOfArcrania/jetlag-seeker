@@ -88,7 +88,7 @@ async function main() {
   server.close();
 
   const parse = (s) => parseInt(String(s).split("/")[0], 10);
-  const wantOverlays = ["Transit lines", "Eliminated area", "Admin · county (L6)"];
+  const wantOverlays = ["Seattle City Limit", "Transit lines", "Eliminated area", "Regions · city"];
   const overlaysOk = wantOverlays.every((l) => overlayLabels.includes(l));
   const ok =
     errors.length === 0 &&

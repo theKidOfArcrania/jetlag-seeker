@@ -28,10 +28,11 @@ def ctx_from_dataset(ds: dict) -> OsmContext:
         kind: [Feature(kind=kind, name=f["name"], lat=f["lat"], lon=f["lon"], osm_id=f["id"]) for f in feats]
         for kind, feats in ds["features_by_kind"].items()
     }
-    ctx.admin_polygons = {
-        int(lvl): [(p["name"], [(lat, lon) for lat, lon in p["ring"]]) for p in polys]
-        for lvl, polys in ds["admin_polygons"].items()
-    }
+    # Admin regions are sourced from the authoritative KML with string keys
+    # ("city"/"neighborhood"/"neighborhood_region"), which jetlag's numeric-level
+    # answerer cannot consume. Admin questions are excluded from this parity
+    # fixture and covered by dedicated TS unit tests instead.
+    ctx.admin_polygons = {}
     ctx.coastlines = [[(lat, lon) for lat, lon in ln] for ln in ds["coastlines"]]
     return ctx
 
@@ -39,7 +40,8 @@ def ctx_from_dataset(ds: dict) -> OsmContext:
 def main() -> int:
     ds = json.loads(DATASET.read_text())
     ctx = ctx_from_dataset(ds)
-    questions = build_question_catalog()
+    # Exclude admin questions: their region model differs from jetlag's.
+    questions = [q for q in build_question_catalog() if q.category != "admin"]
 
     cands = ds["candidates"]
     # Hiders: a spread across the candidate list. Seekers: origin + a few candidates.

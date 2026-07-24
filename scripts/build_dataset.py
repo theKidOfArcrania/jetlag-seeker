@@ -18,6 +18,7 @@ small while preserving point-in-polygon / distance answers to within a few meter
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 import sys
@@ -125,7 +126,9 @@ def load_kml() -> ET.Element:
 
 def _txt(el: ET.Element, tag: str) -> str | None:
     x = el.find("k:" + tag, KML_NS)
-    return x.text if x is not None else None
+    if x is None or x.text is None:
+        return None
+    return html.unescape(x.text)
 
 
 def _folder(doc: ET.Element, name: str) -> ET.Element:

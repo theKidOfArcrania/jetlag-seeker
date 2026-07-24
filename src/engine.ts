@@ -194,8 +194,15 @@ function defaultLabel(spec: StepSpec, answer: Answer): string {
       return `Measuring ${spec.payload} → ${ans}`;
     case "matching":
       return `Matching ${spec.payload} → ${ans}`;
-    case "admin":
-      return `Admin lvl ${spec.payload} → ${ans}`;
+    case "admin": {
+      const adminLabels: Record<string, string> = {
+        city: "City",
+        neighborhood: "Neighborhood",
+        neighborhood_region: "Neighborhood region",
+      };
+      const label = adminLabels[String(spec.payload)] ?? String(spec.payload);
+      return `Region · ${label} → ${ans}`;
+    }
     case "coast":
       return `Coastline → ${ans}`;
     default:

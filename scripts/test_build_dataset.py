@@ -4,9 +4,10 @@ Runnable two ways:
   * pytest:            pytest scripts/test_build_dataset.py
   * plain interpreter: ~/git/jetlag_mapper/.venv/bin/python scripts/test_build_dataset.py
 
-The structure tests need only the built ``public/data/dataset.json``. The
-simplification-fidelity test additionally imports ``jetlag`` (available in the
-jetlag_mapper virtualenv) and is skipped gracefully if it is not importable.
+The dataset is sourced from the authoritative "Jetlag the Seattle" Google
+My Maps KML (hiding region = Seattle City Limit; network = Link 1/2 +
+RapidRide B/C/D/E/G/H + Seattle Streetcar). POIs/coastline still come from OSM
+via ``jetlag``.
 """
 from __future__ import annotations
 
@@ -24,14 +25,26 @@ def load() -> dict:
 
 def test_dataset_has_required_shape() -> None:
     ds = load()
-    for key in ("config", "candidates", "features_by_kind", "admin_polygons", "coastlines", "question_catalog", "transit_lines"):
+    for key in ("config", "candidates", "features_by_kind", "admin_polygons", "coastlines", "boundary", "question_catalog", "transit_lines"):
         assert key in ds, f"missing top-level key {key!r}"
 
     cfg = ds["config"]
-    for key in ("start_lat", "start_lon", "hiding_period_min", "zone_radius_mi", "radar_bands_mi"):
+    for key in ("start_lat", "start_lon", "hiding_period_min", "zone_radius_mi", "radar_bands_mi", "admin_regions"):
         assert key in cfg, f"config missing {key!r}"
     assert cfg["hiding_period_min"] == 45
     assert cfg["zone_radius_mi"] == 0.25
+    assert cfg["admin_regions"] == ["city", "neighborhood", "neighborhood_region"]
+
+
+def test_boundary_is_wellformed() -> None:
+    ds = load()
+    ring = ds["boundary"]
+    assert len(ring) >= 3, "city-limit boundary needs at least a triangle"
+    for pt in ring:
+        assert len(pt) == 2
+        lat, lon = pt
+        assert 47.0 < lat < 48.5, pt
+        assert -123.0 < lon < -121.5, pt
 
 
 def test_candidates_are_wellformed() -> None:
@@ -40,12 +53,19 @@ def test_candidates_are_wellformed() -> None:
     assert len(cands) > 100, f"expected a large candidate universe, got {len(cands)}"
     ids = set()
     for c in cands:
-        assert {"id", "name", "lat", "lon", "travel_min"} <= c.keys()
+        assert {"id", "name", "lat", "lon"} <= c.keys()
+        assert "travel_min" not in c, "candidates no longer carry travel_min"
         assert 47.0 < c["lat"] < 48.5, c
         assert -123.0 < c["lon"] < -121.5, c
-        assert c["travel_min"] <= ds["config"]["hiding_period_min"] + 0.01
         ids.add(c["id"])
     assert len(ids) == len(cands), "candidate ids must be unique"
+
+
+def test_candidate_names_are_unescaped() -> None:
+    ds = load()
+    for c in ds["candidates"]:
+        assert "&amp;" not in c["name"], c["name"]
+        assert "&#" not in c["name"], c["name"]
 
 
 def test_question_catalog_covers_all_categories() -> None:
@@ -53,79 +73,109 @@ def test_question_catalog_covers_all_categories() -> None:
     cats = {q["category"] for q in ds["question_catalog"]}
     assert {"radar", "measuring", "matching", "admin", "coast"} <= cats
     assert len(ds["question_catalog"]) >= 30
+    admin_payloads = {q["payload"] for q in ds["question_catalog"] if q["category"] == "admin"}
+    assert admin_payloads == {"city", "neighborhood", "neighborhood_region"}, admin_payloads
 
 
 def test_features_and_polygons_present() -> None:
     ds = load()
     total_feats = sum(len(v) for v in ds["features_by_kind"].values())
     assert total_feats > 500
-    # Admin polygons for the medium-game levels, each ring a list of [lat, lon].
-    for lvl in ("6", "8", "10"):
-        assert lvl in ds["admin_polygons"]
+    # Admin polygons for the three KML-sourced tiers, each ring a list of [lat, lon].
+    for tier in ("city", "neighborhood", "neighborhood_region"):
+        assert tier in ds["admin_polygons"], tier
     for polys in ds["admin_polygons"].values():
         for p in polys:
             assert len(p["ring"]) >= 3
             assert all(len(pt) == 2 for pt in p["ring"])
 
 
-def test_admin_simplification_preserves_answers() -> None:
-    """Simplified admin rings must classify candidates the same as full OSM data
-    for the overwhelming majority of points (small boundary shifts allowed)."""
-    try:
-        from jetlag.osm.features import fetch_all
-        from jetlag.questions.catalog import admin_containing
-    except Exception:  # pragma: no cover - jetlag not installed in this interpreter
-        print("SKIP test_admin_simplification_preserves_answers (jetlag unavailable)")
-        return
-
+def test_admin_tiers_nest_coarse_to_fine() -> None:
     ds = load()
-    ctx = fetch_all()
-    cands = [(c["lat"], c["lon"]) for c in ds["candidates"]]
-
-    for lvl_str, polys in ds["admin_polygons"].items():
-        lvl = int(lvl_str)
-        full = ctx.admin_polygons.get(lvl, [])
-        if not full:
-            continue
-        simplified = [(p["name"], [(lat, lon) for lat, lon in p["ring"]]) for p in polys]
-        agree = 0
-        for pt in cands:
-            if admin_containing(pt, full) == admin_containing(pt, simplified):
-                agree += 1
-        ratio = agree / len(cands)
-        assert ratio >= 0.97, f"admin level {lvl}: only {ratio:.1%} of candidates classified identically"
-        print(f"admin level {lvl}: {ratio:.1%} agreement across {len(cands)} candidates")
+    ap = ds["admin_polygons"]
+    city_names = {p["name"] for p in ap["city"]}
+    nbhd_names = {p["name"] for p in ap["neighborhood"]}
+    region_names = {p["name"] for p in ap["neighborhood_region"]}
+    assert len(city_names) == 1, city_names
+    # ~20 neighborhood districts, ~90 fine neighborhood regions.
+    assert 10 <= len(nbhd_names) <= 40, len(nbhd_names)
+    assert len(region_names) >= len(nbhd_names), (len(region_names), len(nbhd_names))
+    # Fine names ("District - Neighborhood") carry their district (coarse) prefix.
+    for name in region_names:
+        district = name.split(" - ")[0]
+        assert district in nbhd_names, name
 
 
 def test_transit_lines_wellformed() -> None:
     ds = load()
     lines = ds["transit_lines"]
-    # Link 1/2 + RapidRide A-H = 10 hider-network routes.
+    # Link 1/2 + RapidRide B/C/D/E/G/H + 2 Seattle Streetcars = 10 network routes.
     assert len(lines) == 10, f"expected 10 transit lines, got {len(lines)}"
-    names = {ln["short_name"] for ln in lines}
-    assert names == {f"{n} Line" for n in ("1", "2", "A", "B", "C", "D", "E", "F", "G", "H")}, names
+    names = {ln["name"] for ln in lines}
+    expected = {
+        "1 Line",
+        "2 Line",
+        "RapidRide B Line",
+        "RapidRide C Line",
+        "RapidRide D Line",
+        "RapidRide E Line",
+        "RapidRide G Line",
+        "RapidRide H Line",
+        "South Lake Union Streetcar",
+        "First Hill Streetcar",
+    }
+    assert names == expected, names
     for ln in lines:
-        assert {"short_name", "long_name", "route_type", "color", "points"} <= ln.keys()
+        assert {"name", "route_type", "color", "segments"} <= ln.keys()
         assert ln["color"].startswith("#") and len(ln["color"]) == 7, ln["color"]
         assert ln["route_type"] in (0, 3)
-        assert len(ln["points"]) >= 2, ln["short_name"]
-        for pt in ln["points"]:
-            assert len(pt) == 2
-            assert 47.0 < pt[0] < 48.5 and -123.0 < pt[1] < -121.5, pt
-    # Light rail (Link) uses route_type 0; RapidRide buses use 3.
-    by_name = {ln["short_name"]: ln for ln in lines}
+        assert len(ln["segments"]) >= 1, ln["name"]
+        for seg in ln["segments"]:
+            assert len(seg) >= 2, ln["name"]
+            for pt in seg:
+                assert len(pt) == 2
+                assert 47.0 < pt[0] < 48.5 and -123.0 < pt[1] < -121.5, pt
+    by_name = {ln["name"]: ln for ln in lines}
+    # Light rail + streetcars use route_type 0; RapidRide buses use 3.
     assert by_name["1 Line"]["route_type"] == 0 and by_name["2 Line"]["route_type"] == 0
-    assert all(by_name[f"{c} Line"]["route_type"] == 3 for c in "ABCDEFGH")
+    assert by_name["South Lake Union Streetcar"]["route_type"] == 0
+    assert by_name["First Hill Streetcar"]["route_type"] == 0
+    assert all(by_name[f"RapidRide {c} Line"]["route_type"] == 3 for c in "BCDEGH")
+
+
+def test_candidates_inside_boundary() -> None:
+    """Every candidate should fall inside the Seattle City Limit boundary."""
+    ds = load()
+    ring = [(lat, lon) for lat, lon in ds["boundary"]]
+
+    def inside(lat: float, lon: float) -> bool:
+        hit = False
+        n = len(ring)
+        j = n - 1
+        for i in range(n):
+            yi, xi = ring[i]
+            yj, xj = ring[j]
+            if (yi > lat) != (yj > lat) and lon < (xj - xi) * (lat - yi) / (yj - yi) + xi:
+                hit = not hit
+            j = i
+        return hit
+
+    outside = [c for c in ds["candidates"] if not inside(c["lat"], c["lon"])]
+    ratio = 1 - len(outside) / len(ds["candidates"])
+    assert ratio >= 0.98, f"only {ratio:.1%} of candidates inside the boundary ({len(outside)} outside)"
 
 
 def _run() -> int:
     tests = [
         test_dataset_has_required_shape,
+        test_boundary_is_wellformed,
         test_candidates_are_wellformed,
+        test_candidate_names_are_unescaped,
         test_question_catalog_covers_all_categories,
         test_features_and_polygons_present,
-        test_admin_simplification_preserves_answers,
+        test_admin_tiers_nest_coarse_to_fine,
         test_transit_lines_wellformed,
+        test_candidates_inside_boundary,
     ]
     failed = 0
     for t in tests:
