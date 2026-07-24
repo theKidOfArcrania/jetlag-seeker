@@ -15,6 +15,11 @@ function titleCase(s: string): string {
   return s.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
+/** Stable string key for an answer bucket (booleans stringified). */
+function answerKey(answer: boolean | string): string {
+  return typeof answer === "boolean" ? String(answer) : answer;
+}
+
 // Non-linear radar scale skewed toward small distances. The slider position
 // t ∈ [0,1] maps to miles via exp(A·t² + B·t + C), a monotonic curve fit so that
 // t=0 → 0.1 mi, t=0.5 → 10 mi, t=1 → 50 mi (10 mi sits at the halfway point).
@@ -244,18 +249,14 @@ export class Panels {
       return;
     }
     const buckets = this.store.engine.preview(spec);
-    if (this.category === "thermometer" && this.seekerTo) {
-      this.map.clearPreview();
-      this.map.showThermometerPreview(this.store.seeker, this.seekerTo);
-    }
     const survivors = this.store.engine.survivors();
     for (const b of buckets) {
-      const key = typeof b.answer === "boolean" ? String(b.answer) : b.answer;
+      const key = answerKey(b.answer);
       const empty = b.survivors.length === 0;
       const btn = el("button", {
         class: `bucket ${empty ? "empty" : ""} ${this.selectedAnswerKey === key ? "selected" : ""}`,
         title: empty ? "This answer would eliminate every remaining candidate" : undefined,
-        onclick: () => this.selectAnswer(spec, b.answer, key),
+        onclick: () => this.selectAnswer(key),
       }, [
         el("span", { class: "bucket-ans", text: fmtAnswer(b.answer) }),
         el("span", { class: "bucket-count", text: `${b.survivors.length}` }),
@@ -271,31 +272,45 @@ export class Panels {
       text: "Apply elimination",
     });
     host.append(applyBtn);
+
+    // Redraw the map overlays (thermometer connector, kept/dropped dots, and the
+    // eliminated-area shading) so they always reflect the *current* spec and the
+    // selected answer. This keeps the preview in sync when a secondary control
+    // (radar distance, feature, region) changes or the thermometer destination is
+    // dragged, instead of leaving stale/blank shading behind.
+    this.refreshMapPreview(spec);
   }
 
-  private selectAnswer(spec: StepSpec, answer: boolean | string, key: string): void {
-    this.selectedAnswerKey = key;
-    // Refresh the panel first (its thermometer branch clears the map preview), so
-    // the map layers we draw below aren't wiped.
-    this.renderPreview();
+  /** Recompute and repaint the map preview overlays for the current selection. */
+  private refreshMapPreview(spec: StepSpec): void {
     this.map.clearPreview();
     if (this.category === "thermometer" && this.seekerTo) {
       this.map.showThermometerPreview(this.store.seeker, this.seekerTo);
     }
-    const keep = this.store.engine.survivorsIf(spec, answer);
+    if (this.selectedAnswerKey === null) return;
+    const bucket = this.store.engine
+      .preview(spec)
+      .find((b) => answerKey(b.answer) === this.selectedAnswerKey);
+    if (!bucket) return; // selected answer isn't valid for this spec anymore
+    const keep = this.store.engine.survivorsIf(spec, bucket.answer);
     const keepIds = new Set(keep.map((c) => c.id));
     const drop = this.store.engine.survivors().filter((c) => !keepIds.has(c.id));
     this.map.paintPreview(keep, drop);
-    const area = computePreviewEliminatedArea(this.store.engine.ds, this.store.engine, spec, answer);
+    const area = computePreviewEliminatedArea(this.store.engine.ds, this.store.engine, spec, bucket.answer);
     this.map.renderPreviewArea(area);
+  }
+
+  private selectAnswer(key: string): void {
+    this.selectedAnswerKey = key;
+    // renderPreview() rebuilds the buckets (highlighting the selection) and then
+    // calls refreshMapPreview() to draw the dots + eliminated-area shading.
+    this.renderPreview();
   }
 
   private applyAsk(spec: StepSpec): void {
     if (this.selectedAnswerKey === null) return;
     const buckets = this.store.engine.preview(spec);
-    const bucket = buckets.find(
-      (b) => (typeof b.answer === "boolean" ? String(b.answer) : b.answer) === this.selectedAnswerKey,
-    );
+    const bucket = buckets.find((b) => answerKey(b.answer) === this.selectedAnswerKey);
     if (!bucket) return;
     this.store.applyStep(spec, bucket.answer);
     this.selectedAnswerKey = null;

@@ -179,4 +179,32 @@ describe("computePreviewEliminatedArea (analytic)", () => {
       expect(insideArea(mp, c), `${c.name}`).toBe(false);
     }
   });
+
+  it("thermometer: hotter/colder each shade a non-empty complementary half", () => {
+    const eng = new EliminationEngine(ds);
+    const seekerTo: LatLon = { lat: origin.lat + 0.02, lon: origin.lon + 0.02 };
+    const spec = { category: "thermometer", payload: 0, seeker: origin, seekerTo } as const;
+
+    const hotter = computePreviewEliminatedArea(ds, eng, spec, "hotter");
+    const colder = computePreviewEliminatedArea(ds, eng, spec, "colder");
+    // Both answers must produce visible shading (regression: thermometer preview
+    // used to render nothing / get cleared).
+    expect(hotter.length).toBeGreaterThan(0);
+    expect(colder.length).toBeGreaterThan(0);
+
+    // "hotter" (closer to the destination) eliminates the far half; "colder" the
+    // near half. The two previews are disjoint and each covers real stations.
+    let inHotter = 0;
+    let inColder = 0;
+    for (const c of ds.candidates) {
+      const loc = { lat: c.lat, lon: c.lon };
+      const h = insideArea(hotter, loc);
+      const k = insideArea(colder, loc);
+      expect(h && k, `${c.name} in both halves`).toBe(false);
+      if (h) inHotter++;
+      if (k) inColder++;
+    }
+    expect(inHotter).toBeGreaterThan(0);
+    expect(inColder).toBeGreaterThan(0);
+  });
 });
