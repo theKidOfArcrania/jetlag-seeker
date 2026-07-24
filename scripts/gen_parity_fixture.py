@@ -1,0 +1,67 @@
+"""Generate a JS/Python parity fixture for the ported answerers.
+
+Reconstructs an ``OsmContext`` from the *shipped* dataset.json (so simplified
+admin polygons / coastlines match what the client actually uses), then calls the
+verified ``jetlag.answer_question`` for a grid of (hider, seeker) pairs across the
+whole question catalog. The TS test suite loads this fixture and asserts its port
+produces identical answers.
+
+    ~/git/jetlag_mapper/.venv/bin/python scripts/gen_parity_fixture.py
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+from jetlag.osm.features import Feature, OsmContext
+from jetlag.questions.catalog import answer_question, build_question_catalog
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DATASET = REPO_ROOT / "public" / "data" / "dataset.json"
+OUT = REPO_ROOT / "src" / "__tests__" / "parity_fixture.json"
+
+
+def ctx_from_dataset(ds: dict) -> OsmContext:
+    ctx = OsmContext(bbox=(0, 0, 0, 0))
+    ctx.features_by_kind = {
+        kind: [Feature(kind=kind, name=f["name"], lat=f["lat"], lon=f["lon"], osm_id=f["id"]) for f in feats]
+        for kind, feats in ds["features_by_kind"].items()
+    }
+    ctx.admin_polygons = {
+        int(lvl): [(p["name"], [(lat, lon) for lat, lon in p["ring"]]) for p in polys]
+        for lvl, polys in ds["admin_polygons"].items()
+    }
+    ctx.coastlines = [[(lat, lon) for lat, lon in ln] for ln in ds["coastlines"]]
+    return ctx
+
+
+def main() -> int:
+    ds = json.loads(DATASET.read_text())
+    ctx = ctx_from_dataset(ds)
+    questions = build_question_catalog()
+
+    cands = ds["candidates"]
+    # Hiders: a spread across the candidate list. Seekers: origin + a few candidates.
+    hiders = [cands[i] for i in range(0, len(cands), max(1, len(cands) // 40))][:40]
+    seeker_pts = [(ds["config"]["start_lat"], ds["config"]["start_lon"])]
+    seeker_pts += [(cands[i]["lat"], cands[i]["lon"]) for i in (5, 30, 80, 150, 200) if i < len(cands)]
+
+    cases = []
+    for h in hiders:
+        hloc = (h["lat"], h["lon"])
+        for sloc in seeker_pts:
+            answers = [answer_question(q, hloc, sloc, ctx) for q in questions]
+            cases.append({"hider": list(hloc), "seeker": list(sloc), "answers": answers})
+
+    fixture = {
+        "questions": [{"category": q.category, "name": q.name, "payload": q.payload} for q in questions],
+        "cases": cases,
+    }
+    OUT.write_text(json.dumps(fixture, separators=(",", ":")))
+    print(f"Wrote {OUT}: {len(cases)} cases x {len(questions)} questions")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
