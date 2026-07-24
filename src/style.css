@@ -158,6 +158,14 @@ body {
   border-color: var(--keep);
   background: #ecfdf5;
 }
+.bucket.empty .bucket-count {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.bucket.empty.selected {
+  border-color: #b91c1c;
+  background: #fef2f2;
+}
 .bucket-ans {
   font-weight: 600;
 }

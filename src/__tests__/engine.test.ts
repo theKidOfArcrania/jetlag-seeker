@@ -57,6 +57,37 @@ describe("EliminationEngine radar elimination", () => {
     eng.apply(spec, true);
     expect(eng.survivors().length).toBe(yesCount);
   });
+
+  it("offers answers that eliminate all current survivors (universe-wide buckets)", () => {
+    // Narrow survivors to a cluster near the origin.
+    eng.apply({ category: "radar", payload: 2, seeker: origin }, true);
+    const survivors = eng.survivors();
+    expect(survivors.length).toBeGreaterThan(0);
+
+    // A seeker far from that cluster: a 1-mile radar answered "yes" would keep
+    // only stations near the far seeker — none of the current survivors.
+    let far = ds.candidates[0];
+    let farD = -1;
+    for (const c of ds.candidates) {
+      const dist = (c.lat - origin.lat) ** 2 + (c.lon - origin.lon) ** 2;
+      if (dist > farD) {
+        farD = dist;
+        far = c;
+      }
+    }
+    const spec: StepSpec = { category: "radar", payload: 1, seeker: far };
+
+    const buckets = eng.preview(spec);
+    const yes = buckets.find((b) => b.answer === true);
+    // "yes" is a real answer some station could give (the far seeker's own
+    // station), but zero *current* survivors would give it.
+    expect(yes).toBeDefined();
+    expect(yes!.survivors.length).toBe(0);
+
+    // The seeker can still apply it, which eliminates every remaining candidate.
+    eng.apply(spec, true);
+    expect(eng.survivors().length).toBe(0);
+  });
 });
 
 describe("EliminationEngine undo/redo", () => {

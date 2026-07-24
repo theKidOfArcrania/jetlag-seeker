@@ -81,12 +81,20 @@ export class EliminationEngine {
   }
 
   /**
-   * Group the *current survivors* by the answer they would give for `spec`,
-   * without mutating state. Powers the preview panel and shading.
+   * Group candidates by the answer they would give for `spec`, without mutating
+   * state. Powers the preview panel and shading.
+   *
+   * Buckets are enumerated over the *full candidate universe* so that every
+   * answer a real hider station could truthfully give is offered — including an
+   * answer that no *current survivor* would give. Such a bucket has zero
+   * survivors, and applying it eliminates all remaining candidates (the seeker
+   * may still need to record a truthful answer their candidate set can't explain).
+   * Each bucket's `survivors` counts only current survivors.
    */
   preview(spec: StepSpec): PreviewBucket[] {
+    const survivorIds = new Set(this.survivors().map((c) => c.id));
     const byAnswer = new Map<string, PreviewBucket>();
-    for (const c of this.survivors()) {
+    for (const c of this.ds.candidates) {
       const ans = evaluate(this.ds, spec, c);
       const key = answerKey(ans);
       let bucket = byAnswer.get(key);
@@ -94,7 +102,7 @@ export class EliminationEngine {
         bucket = { answer: ans, survivors: [] };
         byAnswer.set(key, bucket);
       }
-      bucket.survivors.push(c);
+      if (survivorIds.has(c.id)) bucket.survivors.push(c);
     }
     return [...byAnswer.values()].sort((a, b) => b.survivors.length - a.survivors.length);
   }

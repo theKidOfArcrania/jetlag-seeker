@@ -250,8 +250,10 @@ export class Panels {
     const survivors = this.store.engine.survivors();
     for (const b of buckets) {
       const key = typeof b.answer === "boolean" ? String(b.answer) : b.answer;
+      const empty = b.survivors.length === 0;
       const btn = el("button", {
-        class: `bucket ${this.selectedAnswerKey === key ? "selected" : ""}`,
+        class: `bucket ${empty ? "empty" : ""} ${this.selectedAnswerKey === key ? "selected" : ""}`,
+        title: empty ? "This answer would eliminate every remaining candidate" : undefined,
         onclick: () => this.selectAnswer(spec, b.answer, key),
       }, [
         el("span", { class: "bucket-ans", text: fmtAnswer(b.answer) }),
