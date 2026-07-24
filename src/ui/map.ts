@@ -58,6 +58,11 @@ export class MapView {
   private matchingLayers = new Map<string, L.LayerGroup>();
   private matchingVisible = new Set<string>();
   private matchingToggleCb: (() => void) | null = null;
+  // Feature-point markers by id (+ their enabled colour) so we can restyle them
+  // when the user disables/enables individual places.
+  private matchingMarkers = new Map<string, { marker: L.CircleMarker; color: string }>();
+  private featureClickCb: ((id: string) => void) | null = null;
+  private disabledFeatures: ReadonlySet<string> = new Set();
 
   constructor(el: HTMLElement, start: LatLon, seeker: LatLon) {
     this.map = L.map(el, { zoomControl: true }).setView([start.lat, start.lon], 12);
@@ -291,7 +296,7 @@ export class MapView {
       const color = FEATURE_COLORS[i % FEATURE_COLORS.length];
       const grp = L.layerGroup();
       for (const f of feats) {
-        L.circleMarker([f.lat, f.lon], {
+        const marker = L.circleMarker([f.lat, f.lon], {
           renderer: this.featureRenderer,
           radius: 4,
           color: "#fff",
@@ -299,8 +304,10 @@ export class MapView {
           fillColor: color,
           fillOpacity: 0.9,
         })
-          .bindTooltip(`${f.name || featureLabel(kind)} (${featureLabel(kind)})`)
+          .bindTooltip(`${f.name || featureLabel(kind)} (${featureLabel(kind)}) — tap to toggle`)
+          .on("click", () => this.featureClickCb?.(f.id))
           .addTo(grp);
+        this.matchingMarkers.set(f.id, { marker, color });
       }
       this.matchingLayers.set(kind, grp);
       overlays[`Features · ${featureLabel(kind)} (${feats.length})`] = grp;
@@ -359,6 +366,29 @@ export class MapView {
   /** Register a callback fired whenever a matching-feature layer is toggled. */
   onMatchingToggle(cb: () => void): void {
     this.matchingToggleCb = cb;
+  }
+
+  /** Register a callback fired when a feature point is tapped (id of the point). */
+  onFeatureClick(cb: (id: string) => void): void {
+    this.featureClickCb = cb;
+  }
+
+  /** Update which feature points are disabled and restyle them (greyed/hollow). */
+  setDisabledFeatures(ids: ReadonlySet<string>): void {
+    this.disabledFeatures = ids;
+    for (const id of this.matchingMarkers.keys()) this.styleFeatureMarker(id);
+  }
+
+  private styleFeatureMarker(id: string): void {
+    const entry = this.matchingMarkers.get(id);
+    if (!entry) return;
+    const off = this.disabledFeatures.has(id);
+    entry.marker.setStyle({
+      fillColor: off ? COLORS.eliminated : entry.color,
+      color: off ? COLORS.eliminated : "#fff",
+      fillOpacity: off ? 0.35 : 0.9,
+      weight: off ? 0 : 1,
+    });
   }
 
   /** Draw the eliminated area as translucent red polygon(s) (even-odd holes). */

@@ -48,11 +48,20 @@ export interface PreviewBucket {
 }
 
 export class EliminationEngine {
-  readonly ds: Dataset;
+  ds: Dataset;
   private steps: Step[] = [];
   private redo: Step[] = [];
 
   constructor(ds: Dataset) {
+    this.ds = ds;
+  }
+
+  /**
+   * Swap the dataset used to compute answers (e.g. after the user disables some
+   * measuring/matching feature points). History is unaffected — survivors are
+   * recomputed from scratch against the new dataset on the next query.
+   */
+  setDataset(ds: Dataset): void {
     this.ds = ds;
   }
 

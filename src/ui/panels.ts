@@ -63,6 +63,11 @@ export class Panels {
 
   private placingLoi = false;
 
+  // Places-tab: which feature category is expanded to its per-place list, plus
+  // the current search filter within it.
+  private expandedKind: string | null = null;
+  private featureSearch = "";
+
   constructor(store: Store, map: MapView, root: HTMLElement) {
     this.store = store;
     this.map = map;
@@ -194,7 +199,17 @@ export class Panels {
         ),
       );
     } else if (this.category === "measuring" || this.category === "matching") {
-      const kinds = this.category === "measuring" ? cfg.measuring_kinds : cfg.matching_kinds;
+      const kinds =
+        this.category === "measuring"
+          ? this.store.enabledMeasuringKinds()
+          : this.store.enabledMatchingKinds();
+      if (kinds.length === 0) {
+        this.param = "";
+        wrap.append(
+          el("div", { class: "hint", text: "No feature categories enabled. Turn some on in the Places tab." }),
+        );
+        return;
+      }
       if (typeof this.param !== "string" || !kinds.includes(this.param)) this.param = kinds[0];
       wrap.append(
         el("label", { class: "field-label", text: "Feature" }),
@@ -243,6 +258,11 @@ export class Panels {
     const host = this.body.querySelector("#ask-preview") as HTMLElement | null;
     if (!host) return;
     clear(host);
+    if ((this.category === "measuring" || this.category === "matching") && this.param === "") {
+      this.map.clearPreview();
+      host.append(el("div", { class: "hint", text: "No feature categories enabled — turn some on in the Places tab." }));
+      return;
+    }
     const spec = this.currentSpec();
     if (!spec) {
       host.append(el("div", { class: "hint", text: "Place the destination marker to preview." }));
@@ -428,27 +448,127 @@ export class Panels {
     );
   }
 
-  /** Toggle map layers of matching-feature reference points (park, library, …). */
+  /**
+   * Builtin feature categories (park, library, …). Each can be toggled On/Off for
+   * questions (disabled categories drop out of the Ask-tab Measuring & Matching
+   * dropdowns) and shown/hidden on the map. "Disable all"/"Enable all" flip them
+   * in bulk.
+   */
   private renderFeatureCategories(): HTMLElement {
-    const cats = this.map.matchingCategories();
+    const catInfo = new Map(this.map.matchingCategories().map((c) => [c.kind, c]));
+    const kinds = this.store.allKinds();
+    const enabledCount = kinds.filter((k) => this.store.isKindEnabled(k)).length;
     return el("div", { class: "feature-cats" }, [
-      el("div", { class: "field-label", text: "Reference features by category" }),
-      el("div", { class: "hint", text: "Show/hide matching-question feature points on the map." }),
+      el("div", { class: "field-label", text: "Builtin locations (measuring & matching)" }),
+      el("div", {
+        class: "hint",
+        text: "Turn a category off to drop it from the Measuring & Matching questions. “Map” shows/hides its reference points.",
+      }),
+      el("div", { class: "row" }, [
+        el("button", { class: "chip", text: "Disable all", onclick: () => this.store.setAllKindsEnabled(false) }),
+        el("button", { class: "chip", text: "Enable all", onclick: () => this.store.setAllKindsEnabled(true) }),
+        el("span", { class: "hint", text: `${enabledCount}/${kinds.length} enabled` }),
+      ]),
       el(
         "div",
-        { class: "cat-chips" },
-        cats.map((c) =>
-          el("button", {
-            class: `chip ${c.visible ? "keep" : ""}`,
-            text: `${c.label} (${c.count})`,
-            onclick: () => {
-              this.map.setMatchingCategoryVisible(c.kind, !c.visible);
-              this.renderPlaces();
-            },
-          }),
-        ),
+        { class: "loi-list" },
+        kinds.map((kind) => this.renderCategoryRow(kind, catInfo)),
       ),
     ]);
+  }
+
+  /**
+   * One category row (On/Off + Map toggle). When expanded, it also renders a
+   * search box and a capped list of that category's individual places, each of
+   * which can be turned On/Off so a single park/museum is excluded from results.
+   */
+  private renderCategoryRow(
+    kind: string,
+    catInfo: Map<string, { kind: string; label: string; count: number; visible: boolean }>,
+  ): HTMLElement {
+    const info = catInfo.get(kind);
+    const enabled = this.store.isKindEnabled(kind);
+    const visible = info?.visible ?? false;
+    const label = info?.label ?? titleCase(kind);
+    const count = info?.count ?? this.store.ds.features_by_kind[kind]?.length ?? 0;
+    const off = this.store.disabledCountForKind(kind);
+    const expanded = this.expandedKind === kind;
+
+    const row = el("div", { class: `loi-row ${enabled ? "" : "off"}` }, [
+      el("button", {
+        class: "chip",
+        text: expanded ? "▾" : "▸",
+        onclick: () => {
+          this.expandedKind = expanded ? null : kind;
+          this.featureSearch = "";
+          this.renderPlaces();
+        },
+      }),
+      el("span", { class: "loi-name", text: `${label} (${count}${off ? `, ${off} off` : ""})` }),
+      el("button", {
+        class: "chip",
+        text: enabled ? "On" : "Off",
+        onclick: () => this.store.setKindEnabled(kind, !enabled),
+      }),
+      el("button", {
+        class: `chip ${visible ? "keep" : ""}`,
+        text: visible ? "Map ✓" : "Map",
+        onclick: () => {
+          this.map.setMatchingCategoryVisible(kind, !visible);
+          this.renderPlaces();
+        },
+      }),
+    ]);
+    if (!expanded) return row;
+
+    const CAP = 60;
+    const results = el("div", { class: "loi-list feature-places" });
+    const renderResults = (): void => {
+      clear(results);
+      const q = this.featureSearch.trim().toLowerCase();
+      const all = this.store.featuresForKind(kind);
+      const matched = q ? all.filter((f) => (f.name || "").toLowerCase().includes(q)) : all;
+      const shown = matched.slice(0, CAP);
+      if (shown.length === 0) {
+        results.append(el("div", { class: "hint", text: "No matching places." }));
+        return;
+      }
+      for (const f of shown) {
+        const on = this.store.isFeatureEnabled(f.id);
+        results.append(
+          el("div", { class: `loi-row ${on ? "" : "off"}` }, [
+            el("span", { class: "loi-name", text: f.name || `(unnamed ${label})` }),
+            el("button", {
+              class: "chip",
+              text: on ? "On" : "Off",
+              onclick: () => this.store.toggleFeature(f.id),
+            }),
+          ]),
+        );
+      }
+      if (matched.length > shown.length) {
+        results.append(
+          el("div", { class: "hint", text: `Showing ${shown.length} of ${matched.length} — refine search to see more.` }),
+        );
+      }
+    };
+
+    const search = el("input", {
+      class: "text-input",
+      type: "text",
+      placeholder: `Search ${label}…`,
+      value: this.featureSearch,
+      oninput: (e: Event) => {
+        this.featureSearch = (e.target as HTMLInputElement).value;
+        renderResults();
+      },
+    });
+    const bulk = el("div", { class: "row" }, [
+      el("button", { class: "chip", text: "Disable all", onclick: () => this.store.setAllFeaturesEnabledForKind(kind, false) }),
+      el("button", { class: "chip", text: "Enable all", onclick: () => this.store.setAllFeaturesEnabledForKind(kind, true) }),
+    ]);
+    renderResults();
+    return el("div", { class: "cat-expand" }, [row, search, bulk, results]);
   }
 
   private onMapClick(loc: LatLon): void {

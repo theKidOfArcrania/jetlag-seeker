@@ -277,6 +277,19 @@ body {
 .loi-row.off {
   opacity: 0.55;
 }
+.cat-expand {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.02);
+}
+.feature-places {
+  max-height: 260px;
+  overflow-y: auto;
+}
 .loi-name,
 .history-label {
   flex: 1;

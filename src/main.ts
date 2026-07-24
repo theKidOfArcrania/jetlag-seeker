@@ -77,10 +77,13 @@ async function main(): Promise<void> {
     if (visible) renderArea();
     else map.clearArea();
   });
+  // Tapping a feature point on the map toggles whether that place counts in
+  // measuring/matching questions.
+  map.onFeatureClick((id) => store.toggleFeature(id));
 
   function renderArea(): void {
     if (!areaVisible) return;
-    map.renderArea(computeEliminatedArea(ds, store.engine));
+    map.renderArea(computeEliminatedArea(store.engine.ds, store.engine));
   }
 
   function renderMap(): void {
@@ -89,6 +92,7 @@ async function main(): Promise<void> {
     map.renderCandidates(survivors, eliminated);
     map.renderLois(store.lois);
     map.setSeeker(store.seeker);
+    map.setDisabledFeatures(store.disabledFeatureIds());
     countEl.textContent = `${survivors.length}/${ds.candidates.length} left`;
     renderArea();
   }
