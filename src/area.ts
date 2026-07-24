@@ -14,7 +14,8 @@
 
 import polygonClipping, { type MultiPolygon, type Polygon, type Ring } from "polygon-clipping";
 import { nearestFeature, nearestDistanceMi, coastlineDistanceMi, adminContaining } from "./answers";
-import type { EliminationEngine, Step } from "./engine";
+import type { EliminationEngine, Step, StepSpec } from "./engine";
+import type { Answer } from "./answers";
 import type { AdminPolygon, Dataset, LatLon } from "./types";
 
 export interface Bounds {
@@ -305,36 +306,83 @@ const CATEGORY_RANK: Record<string, number> = {
  * multipolygon of [lat, lon] rings with holes). Empty when no questions applied.
  */
 export function computeEliminatedArea(ds: Dataset, engine: EliminationEngine): LatLngMultiPolygon {
-  const boundary = ds.boundary;
-  if (!boundary || boundary.length === 0) return [];
   const steps = engine.history();
   if (steps.length === 0) return [];
+  const ctx = areaContext(ds);
+  if (!ctx) return [];
+
+  const surviving = survivingRegion(ds, steps, ctx);
+  const eliminated =
+    surviving.length === 0
+      ? ctx.boundaryMulti
+      : polygonClipping.difference(ctx.boundaryMulti, surviving);
+  return unproject(eliminated, ctx.proj);
+}
+
+/**
+ * The *incremental* area that answering `spec` with `answer` would eliminate, on
+ * top of the already-applied steps: the currently-surviving region minus the
+ * region that would still survive after the hypothetical step. Powers the Ask-tab
+ * preview shading. Empty when nothing new would be eliminated.
+ */
+export function computePreviewEliminatedArea(
+  ds: Dataset,
+  engine: EliminationEngine,
+  spec: StepSpec,
+  answer: Answer,
+): LatLngMultiPolygon {
+  const ctx = areaContext(ds);
+  if (!ctx) return [];
+
+  const current = survivingRegion(ds, engine.history(), ctx);
+  if (current.length === 0) return [];
+
+  const step: Step = { ...spec, id: "__preview__", label: "", answer };
+  const runBox = bboxOfMultiPolygon(current);
+  const kept = keptRegionForStep(ds, step, ctx.proj, ctx.box, runBox);
+  const previewSurviving =
+    kept.length === 0 ? [] : polygonClipping.intersection(current, kept);
+  const eliminated =
+    previewSurviving.length === 0 ? current : polygonClipping.difference(current, previewSurviving);
+  return unproject(eliminated, ctx.proj);
+}
+
+interface AreaContext {
+  proj: Projection;
+  box: Polygon;
+  boundaryMulti: MultiPolygon;
+}
+
+/** Shared projection + universe rectangle + projected boundary multipolygon. */
+function areaContext(ds: Dataset): AreaContext | null {
+  const boundary = ds.boundary;
+  if (!boundary || boundary.length === 0) return null;
 
   const b = multiPolygonBounds(boundary);
-  if (!Number.isFinite(b.minLat)) return [];
+  if (!Number.isFinite(b.minLat)) return null;
   const proj = new Projection((b.minLat + b.maxLat) / 2, (b.minLon + b.maxLon) / 2);
   const box = rectPolygon(b, proj);
 
   const boundaryMulti: MultiPolygon = boundary
     .filter((poly) => poly.length > 0 && poly[0].length >= 3)
     .map((poly) => poly.map((ring) => closeRing(ring.map(([lat, lon]) => proj.toXY(lat, lon)))));
-  if (boundaryMulti.length === 0) return [];
-  let surviving: MultiPolygon = boundaryMulti;
+  if (boundaryMulti.length === 0) return null;
+  return { proj, box, boundaryMulti };
+}
 
+/** Intersect the boundary with every step's kept region -> the surviving region. */
+function survivingRegion(ds: Dataset, steps: readonly Step[], ctx: AreaContext): MultiPolygon {
+  let surviving: MultiPolygon = ctx.boundaryMulti;
   const ordered = [...steps].sort(
     (s1, s2) => (CATEGORY_RANK[s1.category] ?? 9) - (CATEGORY_RANK[s2.category] ?? 9),
   );
-
   for (const step of ordered) {
     const runBox = bboxOfMultiPolygon(surviving);
-    const kept = keptRegionForStep(ds, step, proj, box, runBox);
+    const kept = keptRegionForStep(ds, step, ctx.proj, ctx.box, runBox);
     surviving = kept.length === 0 ? [] : polygonClipping.intersection(surviving, kept);
     if (surviving.length === 0) break;
   }
-
-  const eliminated =
-    surviving.length === 0 ? boundaryMulti : polygonClipping.difference(boundaryMulti, surviving);
-  return unproject(eliminated, proj);
+  return surviving;
 }
 
 function multiPolygonBounds(mp: readonly [number, number][][][]): Bounds {

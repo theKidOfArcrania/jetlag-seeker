@@ -2,6 +2,7 @@
 // overlays and elimination actions funnel through here into the store + map.
 
 import { distMi } from "../geometry";
+import { computePreviewEliminatedArea } from "../area";
 import type { StepSpec } from "../engine";
 import type { LatLon } from "../types";
 import type { MapView } from "./map";
@@ -274,15 +275,19 @@ export class Panels {
 
   private selectAnswer(spec: StepSpec, answer: boolean | string, key: string): void {
     this.selectedAnswerKey = key;
-    const keep = this.store.engine.survivorsIf(spec, answer);
-    const keepIds = new Set(keep.map((c) => c.id));
-    const drop = this.store.engine.survivors().filter((c) => !keepIds.has(c.id));
+    // Refresh the panel first (its thermometer branch clears the map preview), so
+    // the map layers we draw below aren't wiped.
+    this.renderPreview();
     this.map.clearPreview();
     if (this.category === "thermometer" && this.seekerTo) {
       this.map.showThermometerPreview(this.store.seeker, this.seekerTo);
     }
+    const keep = this.store.engine.survivorsIf(spec, answer);
+    const keepIds = new Set(keep.map((c) => c.id));
+    const drop = this.store.engine.survivors().filter((c) => !keepIds.has(c.id));
     this.map.paintPreview(keep, drop);
-    this.renderPreview();
+    const area = computePreviewEliminatedArea(this.store.engine.ds, this.store.engine, spec, answer);
+    this.map.renderPreviewArea(area);
   }
 
   private applyAsk(spec: StepSpec): void {

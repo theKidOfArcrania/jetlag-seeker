@@ -52,6 +52,7 @@ export class MapView {
   private mapClick: MapClickHandler | null = null;
   private areaRenderer = L.canvas({ padding: 0.5 });
   private areaLayer = L.layerGroup();
+  private previewAreaLayer = L.layerGroup();
   private radarCircle: L.Circle | null = null;
   private featureRenderer = L.canvas({ padding: 0.5 });
   private matchingLayers = new Map<string, L.LayerGroup>();
@@ -66,6 +67,7 @@ export class MapView {
     }).addTo(this.map);
 
     this.candidateLayer.addTo(this.map);
+    this.previewAreaLayer.addTo(this.map);
     this.previewLayer.addTo(this.map);
     this.loiLayer.addTo(this.map);
 
@@ -181,7 +183,30 @@ export class MapView {
 
   clearPreview(): void {
     this.previewLayer.clearLayers();
+    this.previewAreaLayer.clearLayers();
     this.radarCircle = null;
+  }
+
+  /**
+   * Shade the area a pending answer *would* eliminate (Ask-tab preview). Drawn in
+   * the drop colour and distinct from the committed red "Eliminated area" overlay.
+   * `polygons` is a geographic multipolygon (outer ring + holes per polygon).
+   */
+  renderPreviewArea(polygons: [number, number][][][]): void {
+    this.previewAreaLayer.clearLayers();
+    for (const rings of polygons) {
+      if (rings.length === 0) continue;
+      L.polygon(rings, {
+        renderer: this.areaRenderer,
+        stroke: true,
+        color: COLORS.previewDrop,
+        weight: 1,
+        opacity: 0.6,
+        fillColor: COLORS.previewDrop,
+        fillOpacity: 0.2,
+        interactive: false,
+      }).addTo(this.previewAreaLayer);
+    }
   }
 
   /**

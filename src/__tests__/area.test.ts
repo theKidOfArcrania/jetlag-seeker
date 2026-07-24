@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { candidateBounds, computeEliminatedArea, type LatLngMultiPolygon } from "../area";
+import { candidateBounds, computeEliminatedArea, computePreviewEliminatedArea, type LatLngMultiPolygon } from "../area";
 import { EliminationEngine } from "../engine";
 import { distMi } from "../geometry";
 import { nearestDistanceMi, coastlineDistanceMi } from "../answers";
@@ -126,6 +126,57 @@ describe("computeEliminatedArea (analytic)", () => {
       expect(c.lat).toBeLessThanOrEqual(b.maxLat);
       expect(c.lon).toBeGreaterThanOrEqual(b.minLon);
       expect(c.lon).toBeLessThanOrEqual(b.maxLon);
+    }
+  });
+});
+
+describe("computePreviewEliminatedArea (analytic)", () => {
+  it("marks exactly the stations a pending answer would newly eliminate", () => {
+    const eng = new EliminationEngine(ds);
+    const spec = { category: "radar", payload: 3, seeker: origin } as const;
+    const mp = computePreviewEliminatedArea(ds, eng, spec, true);
+    expect(mp.length).toBeGreaterThan(0);
+
+    const keep = new Set(eng.survivorsIf(spec, true).map((c) => c.id));
+    let checked = 0;
+    for (const c of ds.candidates) {
+      if (Math.abs(distMi(c, origin) - 3) < 0.1) continue; // edge band
+      // In previewed area iff answering "true" would drop it (not kept).
+      expect(insideArea(mp, c), `${c.name}`).toBe(!keep.has(c.id));
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(100);
+  });
+
+  it("is incremental: never re-covers already-eliminated stations", () => {
+    const eng = new EliminationEngine(ds);
+    eng.apply({ category: "radar", payload: 3, seeker: origin }, true); // keep within 3mi
+    const mp = computePreviewEliminatedArea(
+      ds,
+      eng,
+      { category: "radar", payload: 2, seeker: origin },
+      true,
+    );
+    for (const c of ds.candidates) {
+      if (eng.survivesAll(c)) continue; // only inspect already-eliminated stations
+      if (Math.abs(distMi(c, origin) - 3) < 0.15) continue; // prior-radar edge band
+      expect(insideArea(mp, c), `${c.name}`).toBe(false);
+    }
+  });
+
+  it("is empty when the pending answer eliminates nothing new", () => {
+    const eng = new EliminationEngine(ds);
+    eng.apply({ category: "radar", payload: 3, seeker: origin }, true);
+    // Answering the identical question the same way removes nothing further.
+    const mp = computePreviewEliminatedArea(
+      ds,
+      eng,
+      { category: "radar", payload: 3, seeker: origin },
+      true,
+    );
+    for (const c of ds.candidates) {
+      if (Math.abs(distMi(c, origin) - 3) < 0.15) continue;
+      expect(insideArea(mp, c), `${c.name}`).toBe(false);
     }
   });
 });
