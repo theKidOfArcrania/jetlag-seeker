@@ -13,7 +13,7 @@
 // rendering tolerance at city scale.
 
 import polygonClipping, { type MultiPolygon, type Polygon, type Ring } from "polygon-clipping";
-import { nearestFeature, nearestDistanceMi, adminContaining } from "./answers";
+import { nearestFeature, nearestDistanceMi, adminContaining, waterMeasureLines } from "./answers";
 import type { EliminationEngine, Step, StepSpec } from "./engine";
 import type { Answer } from "./answers";
 import type { AdminPolygon, Dataset, LatLon } from "./types";
@@ -553,7 +553,7 @@ function keptRegionForStep(
     case "coast":
       return borderMeasuringKept(ds.coastlines, step.answer, step.seeker, proj, box, boxMP);
     case "water":
-      return borderMeasuringKept(ds.water_bodies, step.answer, step.seeker, proj, box, boxMP);
+      return borderMeasuringKept(waterMeasureLines(ds), step.answer, step.seeker, proj, box, boxMP);
     default:
       return boxMP;
   }

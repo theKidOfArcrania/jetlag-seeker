@@ -93,6 +93,15 @@ export function measuringCoastlineAnswer(
   return dh < ds ? "closer" : "further";
 }
 
+/**
+ * Border polylines for the "measuring body of water" question. A body of water
+ * includes the saltwater coast (Puget Sound), so this unions the named water-body
+ * borders with the `natural=coastline` polylines.
+ */
+export function waterMeasureLines(ds: Dataset): [number, number][][] {
+  return [...ds.water_bodies, ...ds.coastlines];
+}
+
 // ---- Matching (same nearest feature) ----------------------------------------
 
 export function matchingAnswer(
@@ -159,7 +168,7 @@ export function answerQuestion(
     case "coast":
       return measuringCoastlineAnswer(hider, seeker, ds.coastlines);
     case "water":
-      return measuringCoastlineAnswer(hider, seeker, ds.water_bodies);
+      return measuringCoastlineAnswer(hider, seeker, waterMeasureLines(ds));
     case "matching":
       return matchingAnswer(hider, seeker, ds.features_by_kind[String(q.payload)] ?? []);
     case "admin":
@@ -191,7 +200,7 @@ export function possibleAnswers(
     case "coast":
       return ds.coastlines.length === 0 ? [NULL] : ["closer", "further", "tie"];
     case "water":
-      return ds.water_bodies.length === 0 ? [NULL] : ["closer", "further", "tie"];
+      return waterMeasureLines(ds).length === 0 ? [NULL] : ["closer", "further", "tie"];
     case "matching": {
       const feats = ds.features_by_kind[String(payload)] ?? [];
       return feats.length === 0 ? [NULL] : ["yes", "no"];

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { candidateBounds, computeEliminatedArea, computePreviewEliminatedArea, type LatLngMultiPolygon } from "../area";
 import { EliminationEngine } from "../engine";
 import { distMi } from "../geometry";
-import { nearestDistanceMi, coastlineDistanceMi } from "../answers";
+import { nearestDistanceMi, coastlineDistanceMi, waterMeasureLines } from "../answers";
 import { loadDatasetSync } from "./helpers";
 import type { Dataset, LatLon } from "../types";
 
@@ -295,9 +295,11 @@ describe("computePreviewEliminatedArea (analytic)", () => {
   it("water: closer/further each shade a non-empty region matching elimination", () => {
     const eng = new EliminationEngine(ds);
     const spec = { category: "water", payload: "water", seeker: origin } as const;
-    // Reuse the generic polyline distance helper against the water-body borders.
-    const dsWater = coastlineDistanceMi(origin, ds.water_bodies)!;
-    expect(ds.water_bodies.length).toBeGreaterThan(0);
+    // A body of water includes the saltwater coast, so measure against the water
+    // borders unioned with the coastline (matching waterMeasureLines).
+    const waterLines = waterMeasureLines(ds);
+    const dsWater = coastlineDistanceMi(origin, waterLines)!;
+    expect(waterLines.length).toBeGreaterThan(0);
 
     const closer = computePreviewEliminatedArea(ds, eng, spec, "closer");
     const further = computePreviewEliminatedArea(ds, eng, spec, "further");
@@ -308,7 +310,7 @@ describe("computePreviewEliminatedArea (analytic)", () => {
     let inFurther = 0;
     for (const c of ds.candidates) {
       const loc = { lat: c.lat, lon: c.lon };
-      if (Math.abs(coastlineDistanceMi(loc, ds.water_bodies)! - dsWater) < 0.15) continue; // edge band
+      if (Math.abs(coastlineDistanceMi(loc, waterLines)! - dsWater) < 0.15) continue; // edge band
       const cl = insideArea(closer, loc);
       const fa = insideArea(further, loc);
       expect(cl && fa, `${c.name} in both`).toBe(false);

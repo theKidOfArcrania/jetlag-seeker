@@ -50,9 +50,13 @@ def main() -> int:
         if q["category"] != "admin"
     ]
     # The "water" category isn't in jetlag's answer_question, but it reuses the
-    # exact coastline measuring logic against the dataset's water-body borders, so
-    # we compute its oracle answer here (keeping it in the parity fixture).
-    water_lines = [[(lat, lon) for lat, lon in ln] for ln in ds.get("water_bodies", [])]
+    # exact coastline measuring logic. A body of water includes the saltwater
+    # coast, so measure against the water-body borders unioned with the
+    # `natural=coastline` polylines (matching the client's waterMeasureLines).
+    water_lines = [
+        [(lat, lon) for lat, lon in ln]
+        for ln in [*ds.get("water_bodies", []), *ds.get("coastlines", [])]
+    ]
 
     def oracle(q: QuestionSpec, hloc, sloc):
         if q.category == "water":
