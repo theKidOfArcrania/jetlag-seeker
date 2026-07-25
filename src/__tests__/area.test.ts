@@ -236,8 +236,36 @@ describe("computePreviewEliminatedArea (analytic)", () => {
     expect(computePreviewEliminatedArea(ds, eng, spec, "hotter").length).toBeGreaterThan(0);
   });
 
+  it("thermometer eliminated-area layer computes without crashing", () => {
+    // Regression: viewing the *committed* eliminated-area layer after accepting a
+    // thermometer computed `boundary \ surviving`, and `surviving` (built by
+    // intersecting with the boundary) shared near-coincident (1-ULP) edges with
+    // it, making polygon-clipping throw "Unable to complete output ring". The
+    // eliminated area is now the union of per-step `boundary \ kept` differences.
+    const byId = (id: string): LatLon => {
+      const c = ds.candidates.find((c) => c.id === id);
+      if (!c) throw new Error(`missing candidate ${id}`);
+      return { lat: c.lat, lon: c.lon };
+    };
+    const eng = new EliminationEngine(ds);
+    eng.apply(
+      { category: "thermometer", payload: 0, seeker: byId("12th-jackson"), seekerTo: byId("148th-ave-ne-ne-55th-st") },
+      "hotter",
+    );
+    expect(() => computeEliminatedArea(ds, eng)).not.toThrow();
+    const mp = computeEliminatedArea(ds, eng);
+    expect(mp.length).toBeGreaterThan(0);
+    // The eliminated area must classify surviving stations as NOT eliminated and
+    // eliminated ones as eliminated, matching the engine.
+    for (const c of ds.candidates) {
+      const loc = { lat: c.lat, lon: c.lon };
+      expect(insideArea(mp, loc)).toBe(!eng.survivesAll(loc));
+    }
+  });
+
   it("coast: closer/further each shade a non-empty region matching elimination", () => {
     const eng = new EliminationEngine(ds);
+
     const spec = { category: "coast", payload: "coastline", seeker: origin } as const;
     const dsCoast = coastlineDistanceMi(origin, ds.coastlines)!;
 

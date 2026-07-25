@@ -632,11 +632,36 @@ export function computeEliminatedArea(ds: Dataset, engine: EliminationEngine): L
   const ctx = areaContext(ds);
   if (!ctx) return [];
 
-  const surviving = survivingRegion(ds, steps, ctx);
+  // Compute the eliminated area as the union of each step's individually-
+  // eliminated region rather than `boundary \ surviving`. The two are
+  // mathematically identical (De Morgan: boundary \ ⋂ keptᵢ = ⋃ (boundary \
+  // keptᵢ)), but `boundary \ surviving` feeds polygon-clipping a subtrahend
+  // (`surviving`) that was built by intersecting *with* the boundary, so it
+  // shares near-coincident (1-ULP) edges with it — the exact condition that
+  // makes `difference` throw "Unable to complete output ring". Each
+  // `boundary \ keptᵢ` instead differences against an independent region
+  // (half-plane / disks), so no artificial shared edges are involved.
+  const ordered = orderedSteps(steps);
+  let surviving: MultiPolygon = ctx.boundaryMulti;
+  const parts: MultiPolygon[] = [];
+  for (const step of ordered) {
+    const runBox = bboxOfMultiPolygon(surviving);
+    const kept = keptRegionForStep(ds, step, ctx.proj, ctx.box, runBox);
+    if (kept.length === 0) {
+      // This step eliminates everything -> the whole boundary is eliminated.
+      return unproject(ctx.boundaryMulti, ctx.proj);
+    }
+    parts.push(polygonClipping.difference(ctx.boundaryMulti, kept));
+    surviving = polygonClipping.intersection(surviving, kept);
+    if (surviving.length === 0) break;
+  }
+
   const eliminated =
-    surviving.length === 0
-      ? ctx.boundaryMulti
-      : polygonClipping.difference(ctx.boundaryMulti, surviving);
+    parts.length === 0
+      ? EMPTY
+      : parts.length === 1
+        ? parts[0]
+        : polygonClipping.union(parts[0], ...parts.slice(1));
   return unproject(eliminated, ctx.proj);
 }
 
@@ -695,12 +720,17 @@ function areaContext(ds: Dataset): AreaContext | null {
   return { proj, box, boundaryMulti };
 }
 
+/** Steps ordered cheap/strong-first so the surviving region shrinks early. */
+function orderedSteps(steps: readonly Step[]): Step[] {
+  return [...steps].sort(
+    (s1, s2) => (CATEGORY_RANK[s1.category] ?? 9) - (CATEGORY_RANK[s2.category] ?? 9),
+  );
+}
+
 /** Intersect the boundary with every step's kept region -> the surviving region. */
 function survivingRegion(ds: Dataset, steps: readonly Step[], ctx: AreaContext): MultiPolygon {
   let surviving: MultiPolygon = ctx.boundaryMulti;
-  const ordered = [...steps].sort(
-    (s1, s2) => (CATEGORY_RANK[s1.category] ?? 9) - (CATEGORY_RANK[s2.category] ?? 9),
-  );
+  const ordered = orderedSteps(steps);
   for (const step of ordered) {
     const runBox = bboxOfMultiPolygon(surviving);
     const kept = keptRegionForStep(ds, step, ctx.proj, ctx.box, runBox);
