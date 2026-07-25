@@ -207,4 +207,32 @@ describe("computePreviewEliminatedArea (analytic)", () => {
     expect(inHotter).toBeGreaterThan(0);
     expect(inColder).toBeGreaterThan(0);
   });
+
+  it("coast: closer/further each shade a non-empty region matching elimination", () => {
+    const eng = new EliminationEngine(ds);
+    const spec = { category: "coast", payload: "coastline", seeker: origin } as const;
+    const dsCoast = coastlineDistanceMi(origin, ds.coastlines)!;
+
+    const closer = computePreviewEliminatedArea(ds, eng, spec, "closer");
+    const further = computePreviewEliminatedArea(ds, eng, spec, "further");
+    // Regression: coastline preview must render shading (used to appear blank).
+    expect(closer.length).toBeGreaterThan(0);
+    expect(further.length).toBeGreaterThan(0);
+
+    // "closer" keeps stations nearer the coast than the seeker, so it eliminates
+    // the farther ones (and vice-versa); the two previews are complementary.
+    let inCloser = 0;
+    let inFurther = 0;
+    for (const c of ds.candidates) {
+      const loc = { lat: c.lat, lon: c.lon };
+      if (Math.abs(coastlineDistanceMi(loc, ds.coastlines)! - dsCoast) < 0.15) continue; // edge band
+      const cl = insideArea(closer, loc);
+      const fa = insideArea(further, loc);
+      expect(cl && fa, `${c.name} in both`).toBe(false);
+      if (cl) inCloser++;
+      if (fa) inFurther++;
+    }
+    expect(inCloser).toBeGreaterThan(0);
+    expect(inFurther).toBeGreaterThan(0);
+  });
 });

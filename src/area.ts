@@ -155,9 +155,14 @@ function bboxOfMultiPolygon(mp: MultiPolygon): Bounds | null {
 // ---- Per-question kept-regions ----------------------------------------------
 
 /** Union of disks of radius `r` (mi) around each point, keeping only points
- *  whose disk can reach the running-region bbox (xy-bounds, padded by r). */
+ *  whose disk can reach the running-region bbox (xy-bounds, padded by r).
+ *
+ *  Points are spatially bucketed (cell ~4r) so each local union stays small and
+ *  distant buckets never interact; the bucket blobs are then unioned. This is
+ *  exact — the result is identical to unioning every disk at once — but several
+ *  times faster for large, spread-out point sets (coastline vertices, parks). */
 function unionDisksXY(pts: Pt[], r: number, keepBox: Bounds | null): MultiPolygon {
-  const disks: Polygon[] = [];
+  const kept: Pt[] = [];
   for (const [x, y] of pts) {
     if (
       keepBox &&
@@ -168,11 +173,27 @@ function unionDisksXY(pts: Pt[], r: number, keepBox: Bounds | null): MultiPolygo
     ) {
       continue;
     }
-    disks.push(circle(x, y, r, 28));
+    kept.push([x, y]);
   }
-  if (disks.length === 0) return [];
-  if (disks.length === 1) return [disks[0]];
-  return polygonClipping.union(disks[0], ...disks.slice(1));
+  if (kept.length === 0) return [];
+  if (kept.length === 1) return [circle(kept[0][0], kept[0][1], r, 28)];
+
+  const cell = Math.max(r * 4, 1e-6);
+  const buckets = new Map<string, Pt[]>();
+  for (const p of kept) {
+    const k = `${Math.floor(p[0] / cell)},${Math.floor(p[1] / cell)}`;
+    let arr = buckets.get(k);
+    if (!arr) buckets.set(k, (arr = []));
+    arr.push(p);
+  }
+
+  const blobs: MultiPolygon[] = [];
+  for (const grp of buckets.values()) {
+    const disks = grp.map(([x, y]) => circle(x, y, r, 28));
+    blobs.push(disks.length === 1 ? [disks[0]] : polygonClipping.union(disks[0], ...disks.slice(1)));
+  }
+  if (blobs.length === 1) return blobs[0];
+  return polygonClipping.union(blobs[0], ...blobs.slice(1));
 }
 
 /** Voronoi cell of `site` among `sites` (planar), clipped to `box`. */
