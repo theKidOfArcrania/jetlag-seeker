@@ -349,7 +349,7 @@ export class MapView {
       for (const f of feats) {
         const marker = L.circleMarker([f.lat, f.lon], {
           renderer: this.featureRenderer,
-          radius: 4,
+          radius: 7,
           color: "#fff",
           weight: 1,
           fillColor: color,
