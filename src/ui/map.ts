@@ -76,6 +76,16 @@ export class MapView {
     this.previewLayer.addTo(this.map);
     this.loiLayer.addTo(this.map);
 
+    // Decorative shading (committed + preview eliminated area) is drawn on a
+    // canvas. Put it on a dedicated pane *below* the overlay pane (where the
+    // interactive feature-point markers live) with pointer-events disabled, so
+    // the shading never intercepts hover/click meant for the POI icons above it.
+    this.map.createPane("shading");
+    const shadingPane = this.map.getPane("shading")!;
+    shadingPane.style.zIndex = "350"; // tilePane(200) < shading < overlayPane(400)
+    shadingPane.style.pointerEvents = "none";
+    this.areaRenderer.options.pane = "shading";
+
     L.marker([start.lat, start.lon], {
       icon: divPin("★", COLORS.start),
       interactive: true,
@@ -496,6 +506,7 @@ export class MapView {
         weight: 1,
         fillColor: COLORS.previewDrop,
         fillOpacity: 0.85,
+        interactive: false,
       }).addTo(this.previewLayer);
     }
     for (const c of keep) {
@@ -505,6 +516,7 @@ export class MapView {
         weight: 1,
         fillColor: COLORS.previewKeep,
         fillOpacity: 0.95,
+        interactive: false,
       }).addTo(this.previewLayer);
     }
   }
