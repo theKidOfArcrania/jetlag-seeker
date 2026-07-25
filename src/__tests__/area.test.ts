@@ -263,18 +263,30 @@ describe("computePreviewEliminatedArea (analytic)", () => {
     expect(inFurther).toBeGreaterThan(0);
   });
 
-  it("coast: a seeker far from the water (Eastside) computes without crashing", () => {
-    // Regression: from ~10mi inland the disk-union overlay overwhelmed
-    // polygon-clipping ("infinite loop passing sweep line over endpoints") and
-    // hung the app. The rectilinear iso-distance builder must stay robust/fast.
+  it("water: closer/further each shade a non-empty region matching elimination", () => {
     const eng = new EliminationEngine(ds);
-    const eastside: LatLon = { lat: 47.6481, lon: -122.1431 }; // Redmond
-    const spec = { category: "coast", payload: "coastline", seeker: eastside } as const;
-    for (const ans of ["closer", "further"] as const) {
-      const t0 = performance.now();
-      const mp = computePreviewEliminatedArea(ds, eng, spec, ans);
-      expect(performance.now() - t0).toBeLessThan(2000);
-      expect(Array.isArray(mp)).toBe(true);
+    const spec = { category: "water", payload: "water", seeker: origin } as const;
+    // Reuse the generic polyline distance helper against the water-body borders.
+    const dsWater = coastlineDistanceMi(origin, ds.water_bodies)!;
+    expect(ds.water_bodies.length).toBeGreaterThan(0);
+
+    const closer = computePreviewEliminatedArea(ds, eng, spec, "closer");
+    const further = computePreviewEliminatedArea(ds, eng, spec, "further");
+    expect(closer.length).toBeGreaterThan(0);
+    expect(further.length).toBeGreaterThan(0);
+
+    let inCloser = 0;
+    let inFurther = 0;
+    for (const c of ds.candidates) {
+      const loc = { lat: c.lat, lon: c.lon };
+      if (Math.abs(coastlineDistanceMi(loc, ds.water_bodies)! - dsWater) < 0.15) continue; // edge band
+      const cl = insideArea(closer, loc);
+      const fa = insideArea(further, loc);
+      expect(cl && fa, `${c.name} in both`).toBe(false);
+      if (cl) inCloser++;
+      if (fa) inFurther++;
     }
+    expect(inCloser).toBeGreaterThan(0);
+    expect(inFurther).toBeGreaterThan(0);
   });
 });

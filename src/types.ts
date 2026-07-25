@@ -26,6 +26,7 @@ export type QuestionCategory =
   | "radar"
   | "measuring"
   | "coast"
+  | "water"
   | "matching"
   | "admin"
   | "thermometer";
@@ -55,6 +56,9 @@ export interface Dataset {
   features_by_kind: Record<string, Feature[]>;
   admin_polygons: Record<string, AdminPolygon[]>;
   coastlines: [number, number][][];
+  // Named bodies of water (lakes/rivers/bays) as border polylines: each entry is a
+  // ring/segment of [lat, lon] points. Used by the "measuring body of water" question.
+  water_bodies: [number, number][][];
   // Play-region boundary as a multipolygon: polygons -> rings (exterior first,
   // then holes) -> [lat, lon]. Covers Seattle + the Eastside extension.
   boundary: [number, number][][][];

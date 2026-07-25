@@ -548,30 +548,45 @@ function keptRegionForStep(
       if (step.answer === "further") return complement(union);
       return EMPTY; // "tie"
     }
-    case "coast": {
-      if (step.answer !== "closer" && step.answer !== "further") {
-        // "tie" eliminates nothing; also guard the empty-coastline case.
-        return ds.coastlines.length === 0 ? boxMP : EMPTY;
-      }
-      if (ds.coastlines.length === 0) return boxMP;
-      // Project the coastline polylines and measure the seeker's distance to the
-      // nearest shoreline *segment* (matching the overlay's field metric) as the
-      // iso-distance threshold, so the shaded region is a clean, smooth band.
-      const linesXY: Pt[][] = ds.coastlines.map((line) => line.map(([lat, lon]) => proj.toXY(lat, lon)));
-      const [sx, sy] = proj.toXY(step.seeker.lat, step.seeker.lon);
-      let dSeg = Infinity;
-      for (const line of linesXY) {
-        for (let i = 0; i + 1 < line.length; i++) {
-          const dd = pointToSegmentMi(sx, sy, [line[i], line[i + 1]]);
-          if (dd < dSeg) dSeg = dd;
-        }
-      }
-      if (!Number.isFinite(dSeg)) return boxMP;
-      return borderDistanceRegion(linesXY, dSeg, step.answer === "closer", box);
-    }
+    case "coast":
+      return borderMeasuringKept(ds.coastlines, step.answer, step.seeker, proj, box, boxMP);
+    case "water":
+      return borderMeasuringKept(ds.water_bodies, step.answer, step.seeker, proj, box, boxMP);
     default:
       return boxMP;
   }
+}
+
+/**
+ * Kept region for a "closer/further to the nearest border" measuring question
+ * (coastline or body of water). `lines` are [lat, lon] border polylines. Uses
+ * the seeker's distance to the nearest *segment* (matching the overlay field
+ * metric) as the iso-distance threshold, so the shaded band is clean and smooth.
+ */
+function borderMeasuringKept(
+  lines: readonly [number, number][][],
+  answer: Answer,
+  seeker: LatLon,
+  proj: Projection,
+  box: Polygon,
+  boxMP: MultiPolygon,
+): MultiPolygon {
+  if (answer !== "closer" && answer !== "further") {
+    // "tie" eliminates nothing; also guard the empty-data case.
+    return lines.length === 0 ? boxMP : EMPTY;
+  }
+  if (lines.length === 0) return boxMP;
+  const linesXY: Pt[][] = lines.map((line) => line.map(([lat, lon]) => proj.toXY(lat, lon)));
+  const [sx, sy] = proj.toXY(seeker.lat, seeker.lon);
+  let dSeg = Infinity;
+  for (const line of linesXY) {
+    for (let i = 0; i + 1 < line.length; i++) {
+      const dd = pointToSegmentMi(sx, sy, [line[i], line[i + 1]]);
+      if (dd < dSeg) dSeg = dd;
+    }
+  }
+  if (!Number.isFinite(dSeg)) return boxMP;
+  return borderDistanceRegion(linesXY, dSeg, answer === "closer", box);
 }
 
 /** Half-plane (as a polygon) of the box on `keep`'s side of the bisector of keep/other. */
@@ -602,6 +617,7 @@ const CATEGORY_RANK: Record<string, number> = {
   matching: 3,
   measuring: 4,
   coast: 5,
+  water: 6,
 };
 
 /**

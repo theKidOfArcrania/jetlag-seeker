@@ -158,6 +158,8 @@ export function answerQuestion(
       return measuringAnswer(hider, seeker, ds.features_by_kind[String(q.payload)] ?? []);
     case "coast":
       return measuringCoastlineAnswer(hider, seeker, ds.coastlines);
+    case "water":
+      return measuringCoastlineAnswer(hider, seeker, ds.water_bodies);
     case "matching":
       return matchingAnswer(hider, seeker, ds.features_by_kind[String(q.payload)] ?? []);
     case "admin":
@@ -188,6 +190,8 @@ export function possibleAnswers(
     }
     case "coast":
       return ds.coastlines.length === 0 ? [NULL] : ["closer", "further", "tie"];
+    case "water":
+      return ds.water_bodies.length === 0 ? [NULL] : ["closer", "further", "tie"];
     case "matching": {
       const feats = ds.features_by_kind[String(payload)] ?? [];
       return feats.length === 0 ? [NULL] : ["yes", "no"];

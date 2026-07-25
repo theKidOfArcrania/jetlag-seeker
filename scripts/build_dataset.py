@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import math
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -34,7 +35,7 @@ from shapely.ops import unary_union
 from shapely.prepared import prep
 
 from jetlag.config import DEFAULT_CONFIG, GameConfig
-from jetlag.osm.features import fetch_all
+from jetlag.osm.features import SEATTLE_BBOX, fetch_all, overpass_query
 from jetlag.questions.catalog import (
     MATCHING_FEATURE_KINDS,
     MEASURING_FEATURE_KINDS,
@@ -48,7 +49,17 @@ THERMOMETER_DISTANCES_MI = (0.5, 3.0, 10.0)
 # Simplification tolerances in degrees (~0.0002 deg ~= 22 m).
 ADMIN_SIMPLIFY_TOL = 0.0002
 COAST_SIMPLIFY_TOL = 0.0002
+WATER_SIMPLIFY_TOL = 0.0002
 LINE_SIMPLIFY_TOL = 0.0001  # transit lines want a little more fidelity (~11 m)
+
+# Body-of-water border extraction. We fetch OSM `natural=water` polygons with full
+# geometry (`out geom`) so we can render their shorelines and answer "closer to a
+# body of water" questions. Keep only water bodies whose border passes within
+# WATER_INCLUDE_BUFFER_DEG of the play region, and whose outer area exceeds
+# WATER_MIN_AREA_M2 (drops fountains, koi ponds, stormwater/clarifier tanks while
+# keeping named lakes, rivers, bays, canals, and sloughs).
+WATER_INCLUDE_BUFFER_DEG = 0.005  # ~0.5 km
+WATER_MIN_AREA_M2 = 25_000  # ~0.025 km^2; sits in the gap above Swan Lake
 
 # Hand-curated feature locations to add on top of the OSM-derived POIs, keyed by
 # feature kind. Each entry is (name, lat, lon, id). Use for game-specific spots
@@ -143,6 +154,98 @@ def _simplify_polyline(line: list[tuple[float, float]], tol: float) -> list[list
         return [[_round(a), _round(b)] for a, b in line]
     ls = LineString([(lon, lat) for lat, lon in line]).simplify(tol, preserve_topology=False)
     return [[_round(lat), _round(lon)] for lon, lat in ls.coords]
+
+
+def _water_geom_query(bbox: tuple[float, float, float, float]) -> str:
+    """Overpass query for named `natural=water` areas with full geometry."""
+    lon_min, lat_min, lon_max, lat_max = bbox
+    b = f"{lat_min},{lon_min},{lat_max},{lon_max}"  # south,west,north,east
+    return (
+        "[out:json][timeout:180];"
+        "("
+        f'relation["natural"="water"]["name"]({b});'
+        f'way["natural"="water"]["name"]({b});'
+        ");"
+        "out geom;"
+    )
+
+
+def _element_polylines(el: dict) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]]]:
+    """Return (outer_rings, all_polylines) as [(lat, lon), ...] for a way/relation.
+
+    Ways contribute a single polyline (also treated as an outer ring). Relations
+    contribute one polyline per member with inline geometry; members with role
+    "outer" additionally count toward the water body's area.
+    """
+    outer: list[list[tuple[float, float]]] = []
+    lines: list[list[tuple[float, float]]] = []
+    if el["type"] == "way":
+        pl = [(p["lat"], p["lon"]) for p in el.get("geometry", [])]
+        if len(pl) >= 2:
+            lines.append(pl)
+            outer.append(pl)
+    else:  # relation
+        for m in el.get("members", []):
+            geom = m.get("geometry")
+            if not geom:
+                continue
+            pl = [(p["lat"], p["lon"]) for p in geom]
+            if len(pl) < 2:
+                continue
+            lines.append(pl)
+            if m.get("role") == "outer":
+                outer.append(pl)
+    return outer, lines
+
+
+def _ring_area_m2(ring: list[tuple[float, float]]) -> float:
+    """Planar (equirectangular) shoelace area of a lat/lon ring, in square metres."""
+    if len(ring) < 3:
+        return 0.0
+    lat0 = sum(p[0] for p in ring) / len(ring)
+    mlat = 111_320.0
+    mlon = 111_320.0 * math.cos(math.radians(lat0))
+    xs = [lon * mlon for _, lon in ring]
+    ys = [lat * mlat for lat, _ in ring]
+    a = 0.0
+    n = len(ring)
+    for i in range(n):
+        j = (i + 1) % n
+        a += xs[i] * ys[j] - xs[j] * ys[i]
+    return abs(a) / 2.0
+
+
+def parse_water_bodies(region: BaseGeometry) -> list[list[list[float]]]:
+    """Fetch named `natural=water` borders near the play region.
+
+    Returns a flat list of simplified [lat, lon] polylines (like ``coastlines``):
+    every kept water body contributes its outer/inner border rings. Bodies are
+    kept only if a border passes within WATER_INCLUDE_BUFFER_DEG of the play
+    region and the summed outer-ring area exceeds WATER_MIN_AREA_M2.
+    """
+    data = overpass_query(_water_geom_query(SEATTLE_BBOX), cache_key="water_geom")
+    near = prep(region.buffer(WATER_INCLUDE_BUFFER_DEG))
+    out: list[list[list[float]]] = []
+    kept_names: list[str] = []
+    for el in data.get("elements", []):
+        outer, lines = _element_polylines(el)
+        if not lines:
+            continue
+        area = sum(_ring_area_m2(r) for r in outer)
+        if area < WATER_MIN_AREA_M2:
+            continue
+        if not any(near.intersects(LineString([(lon, lat) for lat, lon in pl])) for pl in lines):
+            continue
+        for pl in lines:
+            simp = _simplify_polyline(pl, WATER_SIMPLIFY_TOL)
+            if len(simp) >= 2:
+                out.append(simp)
+        name = el.get("tags", {}).get("name")
+        if name:
+            kept_names.append(name)
+    if kept_names:
+        print(f"  water bodies kept ({len(kept_names)}): {', '.join(sorted(set(kept_names)))}")
+    return out
 
 
 def _clean_str(v: object) -> str:
@@ -549,6 +652,8 @@ def build(cfg: GameConfig) -> dict:
         measuring_kinds.append("rail_station")
     matching_kinds = [k for k in MATCHING_FEATURE_KINDS if k in nonempty_kinds]
     coastlines = [_simplify_polyline(ln, COAST_SIMPLIFY_TOL) for ln in ctx.coastlines]
+    water_bodies = parse_water_bodies(region)
+    print(f"Water-body border polylines: {len(water_bodies)}")
 
     # Question catalog: keep the verified non-admin questions from jetlag (dropping
     # any measuring/matching question whose feature kind is now empty); replace the
@@ -561,6 +666,8 @@ def build(cfg: GameConfig) -> dict:
     ]
     if "rail_station" in nonempty_kinds:
         catalog.append({"category": "measuring", "name": "measuring_rail_station", "payload": "rail_station"})
+    if water_bodies:
+        catalog.append({"category": "water", "name": "measuring_water", "payload": "water"})
     catalog += [
         {"category": "admin", "name": "Same city", "payload": "city"},
         {"category": "admin", "name": "Same neighborhood", "payload": "neighborhood"},
@@ -584,6 +691,7 @@ def build(cfg: GameConfig) -> dict:
         "features_by_kind": features_by_kind,
         "admin_polygons": admin_polygons,
         "coastlines": coastlines,
+        "water_bodies": water_bodies,
         "boundary": _shapely_to_latlon_multipolygon(region, ADMIN_SIMPLIFY_TOL),
         "question_catalog": catalog,
         "transit_lines": transit_lines,

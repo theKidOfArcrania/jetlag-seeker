@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from jetlag.osm.features import Feature, OsmContext
-from jetlag.questions.catalog import QuestionSpec, answer_question
+from jetlag.questions.catalog import QuestionSpec, answer_question, measuring_coastline_answer
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATASET = REPO_ROOT / "public" / "data" / "dataset.json"
@@ -49,6 +49,15 @@ def main() -> int:
         for q in ds["question_catalog"]
         if q["category"] != "admin"
     ]
+    # The "water" category isn't in jetlag's answer_question, but it reuses the
+    # exact coastline measuring logic against the dataset's water-body borders, so
+    # we compute its oracle answer here (keeping it in the parity fixture).
+    water_lines = [[(lat, lon) for lat, lon in ln] for ln in ds.get("water_bodies", [])]
+
+    def oracle(q: QuestionSpec, hloc, sloc):
+        if q.category == "water":
+            return measuring_coastline_answer(hloc, sloc, water_lines)
+        return answer_question(q, hloc, sloc, ctx)
 
     cands = ds["candidates"]
     # Hiders: a spread across the candidate list. Seekers: origin + a few candidates.
@@ -60,7 +69,7 @@ def main() -> int:
     for h in hiders:
         hloc = (h["lat"], h["lon"])
         for sloc in seeker_pts:
-            answers = [answer_question(q, hloc, sloc, ctx) for q in questions]
+            answers = [oracle(q, hloc, sloc) for q in questions]
             cases.append({"hider": list(hloc), "seeker": list(sloc), "answers": answers})
 
     fixture = {

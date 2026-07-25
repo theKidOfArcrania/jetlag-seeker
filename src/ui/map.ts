@@ -305,6 +305,25 @@ export class MapView {
       overlays[`Coastline (${coastlines.length})`] = coastLayer;
     }
 
+    // Bodies of water: named OSM `natural=water` borders (lakes, rivers, bays,
+    // canals) used by the "measuring body of water" question. Default OFF; drawn
+    // in a lighter aqua to distinguish from the saltwater coastline above.
+    const waterBodies = ds.water_bodies ?? [];
+    if (waterBodies.length > 0) {
+      const waterLayer = L.layerGroup();
+      for (const line of waterBodies) {
+        if (line.length < 2) continue;
+        L.polyline(line as [number, number][], {
+          color: "#0891b2",
+          weight: 2,
+          opacity: 0.85,
+        })
+          .bindTooltip("Body of water", { sticky: true })
+          .addTo(waterLayer);
+      }
+      overlays[`Bodies of water (${waterBodies.length})`] = waterLayer;
+    }
+
     // Eliminated-area polygons; computed lazily by the caller when toggled on.
     overlays["Eliminated area"] = this.areaLayer;
 

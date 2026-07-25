@@ -190,6 +190,7 @@ export class Panels {
   private currentSpec(): StepSpec | null {
     const seeker = this.store.seeker;
     if (this.category === "coast") return { category: "coast", payload: "coastline", seeker };
+    if (this.category === "water") return { category: "water", payload: "water", seeker };
     if (this.category === "thermometer") {
       if (!this.seekerTo) return null;
       return { category: "thermometer", payload: 0, seeker, seekerTo: this.seekerTo };
@@ -209,6 +210,7 @@ export class Panels {
         ["matching", "Matching (same nearest)"],
         ["admin", "Matching admin region"],
         ["coast", "Measuring coastline"],
+        ["water", "Measuring body of water"],
       ].map(([v, label]) =>
         el("option", { value: v, selected: v === this.category, text: label }),
       ),
