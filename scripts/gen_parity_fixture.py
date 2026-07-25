@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from jetlag.osm.features import Feature, OsmContext
-from jetlag.questions.catalog import answer_question, build_question_catalog
+from jetlag.questions.catalog import QuestionSpec, answer_question
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATASET = REPO_ROOT / "public" / "data" / "dataset.json"
@@ -40,14 +40,14 @@ def ctx_from_dataset(ds: dict) -> OsmContext:
 def main() -> int:
     ds = json.loads(DATASET.read_text())
     ctx = ctx_from_dataset(ds)
-    # Exclude admin questions and any question dropped from the shipped catalog
-    # (e.g. feature kinds with no in-region locations), so the fixture stays
-    # aligned 1:1 with the dataset the client actually loads.
-    shipped = {(q["category"], str(q["payload"])) for q in ds["question_catalog"]}
+    # Build the question list straight from the shipped catalog (minus admin, which
+    # uses a KML region model the Python oracle can't consume). This keeps the
+    # fixture aligned 1:1 with the client's dataset and automatically covers extra
+    # feature kinds (e.g. rail_station) that aren't in build_question_catalog().
     questions = [
-        q
-        for q in build_question_catalog()
-        if q.category != "admin" and (q.category, str(q.payload)) in shipped
+        QuestionSpec(category=q["category"], name=q["name"], payload=q["payload"])
+        for q in ds["question_catalog"]
+        if q["category"] != "admin"
     ]
 
     cands = ds["candidates"]

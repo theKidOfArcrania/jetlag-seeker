@@ -308,9 +308,11 @@ export class MapView {
     // Eliminated-area polygons; computed lazily by the caller when toggled on.
     overlays["Eliminated area"] = this.areaLayer;
 
-    // Matching-feature reference points: one toggleable layer per matching kind
-    // (park, library, museum, …). All default OFF (parks alone are ~2800 points).
-    ds.config.matching_kinds.forEach((kind, i) => {
+    // Feature reference points: one toggleable layer per feature kind used by
+    // Measuring or Matching questions (park, library, museum, rail_station, …).
+    // All default OFF (parks alone are ~2800 points).
+    const featureKinds = [...new Set([...ds.config.measuring_kinds, ...ds.config.matching_kinds])];
+    featureKinds.forEach((kind, i) => {
       const feats = ds.features_by_kind[kind] ?? [];
       if (feats.length === 0) return;
       const color = FEATURE_COLORS[i % FEATURE_COLORS.length];

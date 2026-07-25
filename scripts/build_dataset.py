@@ -85,6 +85,12 @@ NETWORK_FOLDERS = (
     "RapidRide (B, C, D, E, G, H)",
     "Seattle Streetcar",
 )
+# Light-rail (Link) folders only. Their stations become the "rail_station"
+# measuring feature kind ("closest rail station" uses light rail per game rules).
+LIGHT_RAIL_FOLDERS = (
+    "1 Line",
+    "2 Line (Extension Only)",
+)
 CITY_LIMIT_FOLDER = "Seattle City Limit"
 NEIGHBORHOODS_FOLDER = "Seattle Neighborhoods"
 
@@ -352,12 +358,17 @@ def _clean_station_name(name: str) -> str:
     return name
 
 
-def parse_candidates(doc: ET.Element, region: BaseGeometry) -> list[dict]:
-    """Every hider-network station Point inside the play region, deduped by name +
+def parse_stations(
+    doc: ET.Element,
+    region: BaseGeometry,
+    folders: tuple[str, ...],
+    id_prefix: str = "",
+) -> list[dict]:
+    """Every station Point in ``folders`` inside the play region, deduped by name +
     proximity (collapsing opposite-direction and multi-bay stops)."""
     region_prepared = prep(region)
     raw: list[tuple[str, float, float]] = []
-    for folder_name in NETWORK_FOLDERS:
+    for folder_name in folders:
         for pm in _folder(doc, folder_name).findall("k:Placemark", KML_NS):
             pts = _placemark_geoms(pm, "Point")
             if not pts:
@@ -381,20 +392,25 @@ def parse_candidates(doc: ET.Element, region: BaseGeometry) -> list[dict]:
         else:
             clusters.append({"name": name, "lat": lat, "lon": lon, "lats": [lat], "lons": [lon]})
 
-    candidates = []
+    stations = []
     used_ids: set[str] = set()
     for c in sorted(clusters, key=lambda c: c["name"]):
         lat = sum(c["lats"]) / len(c["lats"])
         lon = sum(c["lons"]) / len(c["lons"])
         slug = re.sub(r"[^a-z0-9]+", "-", c["name"].lower()).strip("-") or "stop"
-        sid = slug
+        sid = f"{id_prefix}{slug}"
         n = 2
         while sid in used_ids:
-            sid = f"{slug}-{n}"
+            sid = f"{id_prefix}{slug}-{n}"
             n += 1
         used_ids.add(sid)
-        candidates.append({"id": sid, "name": c["name"], "lat": _round(lat), "lon": _round(lon)})
-    return candidates
+        stations.append({"id": sid, "name": c["name"], "lat": _round(lat), "lon": _round(lon)})
+    return stations
+
+
+def parse_candidates(doc: ET.Element, region: BaseGeometry) -> list[dict]:
+    """Every hider-network station Point inside the play region (all route families)."""
+    return parse_stations(doc, region, NETWORK_FOLDERS)
 
 
 def parse_admin_regions(
@@ -518,8 +534,19 @@ def build(cfg: GameConfig) -> dict:
             print(f"  added manual feature {name!r} ({kind})")
         if not bucket:
             del features_by_kind[kind]
+
+    # Light-rail (Link) stations as a measuring feature kind: "closest rail
+    # station" measures to light rail. These come straight from the KML rail
+    # folders (not OSM POIs), so they're added after the region filter above.
+    rail_stations = parse_stations(doc, region, LIGHT_RAIL_FOLDERS, id_prefix="rail-")
+    if rail_stations:
+        features_by_kind["rail_station"] = rail_stations
+        print(f"  added feature kind 'rail_station' ({len(rail_stations)} light-rail stations)")
+
     nonempty_kinds = set(features_by_kind)
     measuring_kinds = [k for k in MEASURING_FEATURE_KINDS if k in nonempty_kinds]
+    if "rail_station" in nonempty_kinds:
+        measuring_kinds.append("rail_station")
     matching_kinds = [k for k in MATCHING_FEATURE_KINDS if k in nonempty_kinds]
     coastlines = [_simplify_polyline(ln, COAST_SIMPLIFY_TOL) for ln in ctx.coastlines]
 
@@ -532,6 +559,8 @@ def build(cfg: GameConfig) -> dict:
         if q.category != "admin"
         and not (q.category in ("measuring", "matching") and q.payload not in nonempty_kinds)
     ]
+    if "rail_station" in nonempty_kinds:
+        catalog.append({"category": "measuring", "name": "measuring_rail_station", "payload": "rail_station"})
     catalog += [
         {"category": "admin", "name": "Same city", "payload": "city"},
         {"category": "admin", "name": "Same neighborhood", "payload": "neighborhood"},
