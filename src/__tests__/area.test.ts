@@ -208,6 +208,33 @@ describe("computePreviewEliminatedArea (analytic)", () => {
     expect(inColder).toBeGreaterThan(0);
   });
 
+  it("thermometer preview over a thermometer-carved region computes without crashing", () => {
+    // Regression: `current \ (current ∩ kept)` was computed as an intersection
+    // followed by a difference; the intersection's output shared near-coincident
+    // (1-ULP) edges with `current`, and feeding those back into difference made
+    // polygon-clipping throw "Unable to complete output ring". This exact pair of
+    // thermometer questions used to crash; it must now compute a real region.
+    const byId = (id: string): LatLon => {
+      const c = ds.candidates.find((c) => c.id === id);
+      if (!c) throw new Error(`missing candidate ${id}`);
+      return { lat: c.lat, lon: c.lon };
+    };
+    const eng = new EliminationEngine(ds);
+    eng.apply(
+      { category: "thermometer", payload: 0, seeker: byId("12th-jackson"), seekerTo: byId("148th-ave-ne-ne-55th-st") },
+      "hotter",
+    );
+    const spec = {
+      category: "thermometer",
+      payload: 0,
+      seeker: byId("156th-ave-ne-ne-15th-pl"),
+      seekerTo: byId("15th-ave-w-w-armour-st"),
+    } as const;
+    expect(() => computePreviewEliminatedArea(ds, eng, spec, "hotter")).not.toThrow();
+    expect(() => computePreviewEliminatedArea(ds, eng, spec, "colder")).not.toThrow();
+    expect(computePreviewEliminatedArea(ds, eng, spec, "hotter").length).toBeGreaterThan(0);
+  });
+
   it("coast: closer/further each shade a non-empty region matching elimination", () => {
     const eng = new EliminationEngine(ds);
     const spec = { category: "coast", payload: "coastline", seeker: origin } as const;

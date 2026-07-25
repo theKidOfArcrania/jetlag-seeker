@@ -642,10 +642,14 @@ export function computePreviewEliminatedArea(
   const step: Step = { ...spec, id: "__preview__", label: "", answer };
   const runBox = bboxOfMultiPolygon(current);
   const kept = keptRegionForStep(ds, step, ctx.proj, ctx.box, runBox);
-  const previewSurviving =
-    kept.length === 0 ? [] : polygonClipping.intersection(current, kept);
-  const eliminated =
-    previewSurviving.length === 0 ? current : polygonClipping.difference(current, previewSurviving);
+  // The incremental eliminated area is `current \ (current ∩ kept)`, which is
+  // mathematically identical to `current \ kept`. Computing the difference
+  // directly avoids the intermediate intersection, whose output shares
+  // near-coincident (1-ULP) edges with `current`; feeding those back into
+  // `difference` is what made polygon-clipping throw "Unable to complete output
+  // ring". `kept` is an independent region (half-plane / disks), so the direct
+  // difference has no artificially-shared edges.
+  const eliminated = kept.length === 0 ? current : polygonClipping.difference(current, kept);
   return unproject(eliminated, ctx.proj);
 }
 
