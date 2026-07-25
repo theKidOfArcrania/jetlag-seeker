@@ -55,7 +55,7 @@ export class Panels {
   // Ask-tab selection state
   private category = "radar";
   private param: string | number = 0.25;
-  private seekerTo: LatLon | null = null;
+  private thermoStart: LatLon | null = null;
   private selectedAnswerKey: string | null = null;
 
   // Radar-tab state
@@ -148,8 +148,8 @@ export class Panels {
     this.tab = id;
     this.map.clearPreview();
     this.selectedAnswerKey = null;
-    // Preserve the thermometer destination ("drop box") across tab switches: show
-    // its marker only on the Ask/thermometer view, but keep this.seekerTo so it
+    // Preserve the thermometer *start* marker across tab switches: show its
+    // marker only on the Ask/thermometer view, but keep this.thermoStart so it
     // reappears (with a working drag handler) when returning to Ask.
     if (id === "ask" && this.category === "thermometer") {
       this.showThermometerMarker();
@@ -163,11 +163,11 @@ export class Panels {
     this.renderTab();
   }
 
-  /** (Re)show the thermometer destination marker and (re)bind its drag handler. */
+  /** (Re)show the thermometer start marker and (re)bind its drag handler. */
   private showThermometerMarker(): void {
-    if (!this.seekerTo) return;
-    this.map.setSeekerTo(this.seekerTo);
-    this.map.onSeekerToMove((loc) => { this.seekerTo = loc; this.renderPreview(); });
+    if (!this.thermoStart) return;
+    this.map.setSeekerTo(this.thermoStart);
+    this.map.onSeekerToMove((loc) => { this.thermoStart = loc; this.renderPreview(); });
   }
 
   private onStoreChange(): void {
@@ -192,8 +192,10 @@ export class Panels {
     if (this.category === "coast") return { category: "coast", payload: "coastline", seeker };
     if (this.category === "water") return { category: "water", payload: "water", seeker };
     if (this.category === "thermometer") {
-      if (!this.seekerTo) return null;
-      return { category: "thermometer", payload: 0, seeker, seekerTo: this.seekerTo };
+      if (!this.thermoStart) return null;
+      // `seeker` is the seeker's live/located position (the leg's END); the movable
+      // marker is the leg's START. The engine measures START -> END for hotter/colder.
+      return { category: "thermometer", payload: 0, seeker, seekerTo: this.thermoStart };
     }
     return { category: this.category as StepSpec["category"], payload: this.param, seeker };
   }
@@ -296,11 +298,13 @@ export class Panels {
     this.selectedAnswerKey = null;
     if (cat === "thermometer") {
       const s = this.store.seeker;
-      this.seekerTo = { lat: s.lat + 0.02, lon: s.lon + 0.02 };
+      // The leg starts at the seeker's current location; they then travel (and
+      // press 📍 Locate) so their live position becomes the leg's END.
+      this.thermoStart = { lat: s.lat, lon: s.lon };
       this.showThermometerMarker();
     } else {
       this.map.setSeekerTo(null);
-      this.seekerTo = null;
+      this.thermoStart = null;
     }
     this.renderTab();
   }
@@ -355,8 +359,8 @@ export class Panels {
   /** Recompute and repaint the map preview overlays for the current selection. */
   private refreshMapPreview(spec: StepSpec): void {
     this.map.clearPreview();
-    if (this.category === "thermometer" && this.seekerTo) {
-      this.map.showThermometerPreview(this.store.seeker, this.seekerTo);
+    if (this.category === "thermometer" && this.thermoStart) {
+      this.map.showThermometerPreview(this.thermoStart, this.store.seeker);
     }
     if (this.selectedAnswerKey === null) return;
     const bucket = this.store.engine

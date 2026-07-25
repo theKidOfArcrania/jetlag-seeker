@@ -192,8 +192,9 @@ describe("computePreviewEliminatedArea (analytic)", () => {
     expect(hotter.length).toBeGreaterThan(0);
     expect(colder.length).toBeGreaterThan(0);
 
-    // "hotter" (closer to the destination) eliminates the far half; "colder" the
-    // near half. The two previews are disjoint and each covers real stations.
+    // "hotter" (seeker's live END position closer than the START) keeps the half
+    // nearer the END; "colder" the other half. The two previews are disjoint and
+    // each covers real stations.
     let inHotter = 0;
     let inColder = 0;
     for (const c of ds.candidates) {

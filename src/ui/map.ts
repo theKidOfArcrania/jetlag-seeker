@@ -141,7 +141,7 @@ export class MapView {
         icon: divPin("◎", COLORS.seekerTo),
         draggable: true,
         zIndexOffset: 900,
-      }).bindTooltip("Seeker destination").addTo(this.map);
+      }).bindTooltip("Thermometer start (drag me)").addTo(this.map);
     } else {
       this.seekerToMarker.setLatLng([loc.lat, loc.lon]);
     }

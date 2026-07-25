@@ -32,7 +32,9 @@ function nextId(): string {
 export function evaluate(ds: Dataset, spec: StepSpec, hider: LatLon): Answer {
   if (spec.category === "thermometer") {
     if (!spec.seekerTo) throw new Error("thermometer step requires seekerTo");
-    return thermometerAnswer(hider, spec.seeker, spec.seekerTo);
+    // `seekerTo` holds the leg's START and `seeker` the live END, so measure
+    // START -> END: hotter when the seeker's current position is closer.
+    return thermometerAnswer(hider, spec.seekerTo, spec.seeker);
   }
   const q: QuestionSpec = {
     category: spec.category,

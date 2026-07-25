@@ -505,10 +505,12 @@ function keptRegionForStep(
     }
     case "thermometer": {
       if (!step.seekerTo) return boxMP;
+      // seeker = leg END (A), seekerTo = leg START (B). Measure START -> END:
+      // hotter keeps the half nearer the END (A).
       const A = proj.toXYLoc(step.seeker);
       const B = proj.toXYLoc(step.seekerTo);
-      if (step.answer === "hotter") return [voronoiHalf(box, B, A)];
-      if (step.answer === "colder") return [voronoiHalf(box, A, B)];
+      if (step.answer === "hotter") return [voronoiHalf(box, A, B)];
+      if (step.answer === "colder") return [voronoiHalf(box, B, A)];
       return EMPTY; // "same": measure-zero line -> nothing kept
     }
     case "admin": {
