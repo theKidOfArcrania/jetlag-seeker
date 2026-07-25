@@ -124,7 +124,9 @@ export function matchingAdminAnswer(
   if (polygons.length === 0) return NULL;
   const nh = adminContaining(hider, polygons);
   const ns = adminContaining(seeker, polygons);
-  if (nh === null && ns === null) return "yes_both_outside";
+  // If either point is outside all regions (including both), they aren't in the
+  // same named region, so the answer is "no". There is no distinct "both
+  // outside" answer.
   if (nh === null || ns === null) return "no";
   return nh === ns ? "yes" : "no";
 }
@@ -192,7 +194,7 @@ export function possibleAnswers(
     }
     case "admin": {
       const polys = ds.admin_polygons[String(payload)] ?? [];
-      return polys.length === 0 ? [NULL] : ["yes", "no", "yes_both_outside"];
+      return polys.length === 0 ? [NULL] : ["yes", "no"];
     }
     default:
       return [];

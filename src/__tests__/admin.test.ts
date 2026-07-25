@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminContaining, matchingAdminAnswer, answerQuestion } from "../answers";
+import { adminContaining, matchingAdminAnswer, answerQuestion, possibleAnswers } from "../answers";
 import { pointInPolygon } from "../geometry";
 import { loadDatasetSync } from "./helpers";
 import type { Dataset, QuestionSpec } from "../types";
@@ -73,6 +73,20 @@ describe("admin region matching (KML tiers)", () => {
   it("returns 'no' when one point is outside the region set", () => {
     const region = ds.admin_polygons.neighborhood_region;
     expect(matchingAdminAnswer(ds.candidates[0], far, region)).toBe("no");
+  });
+
+  it("returns 'no' (not a distinct 'both outside') when both points are outside", () => {
+    const region = ds.admin_polygons.neighborhood_region;
+    const far2 = { lat: 48.95, lon: -122.95 };
+    expect(adminContaining(far, region)).toBeNull();
+    expect(adminContaining(far2, region)).toBeNull();
+    expect(matchingAdminAnswer(far, far2, region)).toBe("no");
+  });
+
+  it("offers only yes/no answers for admin questions", () => {
+    for (const tier of ds.config.admin_regions) {
+      expect(possibleAnswers("admin", tier, ds)).toEqual(["yes", "no"]);
+    }
   });
 
   it("answerQuestion routes admin questions to the right tier polygons", () => {

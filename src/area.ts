@@ -515,15 +515,16 @@ function keptRegionForStep(
       const polys = ds.admin_polygons[String(step.payload)] ?? [];
       if (polys.length === 0) return boxMP;
       const seekerName = adminContaining(step.seeker, polys);
-      const all = adminUnion(polys, proj);
       if (step.answer === "yes") {
+        // "Same region" is only possible when the seeker is inside one.
         if (seekerName === null) return EMPTY;
         return adminUnion(polys, proj, seekerName);
       }
-      if (step.answer === "yes_both_outside") return complement(all);
-      // "no"
-      if (seekerName !== null) return complement(adminUnion(polys, proj, seekerName));
-      return all;
+      // "no": everywhere outside the seeker's region. When the seeker itself is
+      // outside all regions every location answers "no" (both-outside counts as
+      // "no" now), so nothing is eliminated.
+      if (seekerName === null) return boxMP;
+      return complement(adminUnion(polys, proj, seekerName));
     }
     case "matching": {
       const feats = ds.features_by_kind[String(step.payload)] ?? [];
