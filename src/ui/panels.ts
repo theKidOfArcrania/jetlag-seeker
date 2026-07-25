@@ -508,7 +508,9 @@ export class Panels {
   private renderFeatureCategories(): HTMLElement {
     const catInfo = new Map(this.map.matchingCategories().map((c) => [c.kind, c]));
     const kinds = this.store.allKinds();
-    const enabledCount = kinds.filter((k) => this.store.isKindEnabled(k)).length;
+    const totalFeatures = kinds.reduce((n, k) => n + this.store.featuresForKind(k).length, 0);
+    const disabledFeatures = kinds.reduce((n, k) => n + this.store.disabledCountForKind(k), 0);
+    const enabledFeatures = totalFeatures - disabledFeatures;
     return el("div", { class: "feature-cats" }, [
       el("div", { class: "field-label", text: "Builtin locations (measuring & matching)" }),
       el("div", {
@@ -516,9 +518,9 @@ export class Panels {
         text: "Turn a category off to drop it from the Measuring & Matching questions. “Map” shows/hides its reference points.",
       }),
       el("div", { class: "row" }, [
-        el("button", { class: "chip", text: "Disable all", onclick: () => this.store.setAllKindsEnabled(false) }),
-        el("button", { class: "chip", text: "Enable all", onclick: () => this.store.setAllKindsEnabled(true) }),
-        el("span", { class: "hint", text: `${enabledCount}/${kinds.length} enabled` }),
+        el("button", { class: "chip", text: "Disable all", onclick: () => this.store.setAllFeaturesEnabled(false) }),
+        el("button", { class: "chip", text: "Enable all", onclick: () => this.store.setAllFeaturesEnabled(true) }),
+        el("span", { class: "hint", text: `${enabledFeatures}/${totalFeatures} locations enabled` }),
       ]),
       el(
         "div",

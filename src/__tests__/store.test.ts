@@ -107,6 +107,24 @@ describe("Store — individual feature enablement", () => {
     expect(s.engine.ds.features_by_kind[kind]).toHaveLength(total);
   });
 
+  it("setAllFeaturesEnabled disables/enables every location across all categories", () => {
+    const s = new Store(ds);
+    const kinds = s.allKinds().filter((k) => s.featuresForKind(k).length > 0);
+    const totalByKind = new Map(kinds.map((k) => [k, s.featuresForKind(k).length]));
+    s.setAllFeaturesEnabled(false);
+    for (const k of kinds) {
+      expect(s.disabledCountForKind(k)).toBe(totalByKind.get(k)!);
+      expect(s.engine.ds.features_by_kind[k]).toHaveLength(0);
+    }
+    // Categories themselves remain enabled — only the individual places are off.
+    for (const k of kinds) expect(s.isKindEnabled(k)).toBe(true);
+    s.setAllFeaturesEnabled(true);
+    for (const k of kinds) {
+      expect(s.disabledCountForKind(k)).toBe(0);
+      expect(s.engine.ds.features_by_kind[k]).toHaveLength(totalByKind.get(k)!);
+    }
+  });
+
   it("persists disabled features across reloads", () => {
     const s1 = new Store(ds);
     const id = s1.featuresForKind(kindWithFeatures(s1))[0].id;

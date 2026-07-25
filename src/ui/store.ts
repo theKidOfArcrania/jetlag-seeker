@@ -154,6 +154,19 @@ export class Store extends EventTarget {
     this.emit();
   }
 
+  /** Enable/disable every individual feature point across all categories at once. */
+  setAllFeaturesEnabled(enabled: boolean): void {
+    for (const kind of this.allKinds()) {
+      for (const f of this.featuresForKind(kind)) {
+        if (enabled) this.disabledFeatures.delete(f.id);
+        else this.disabledFeatures.add(f.id);
+      }
+    }
+    this.syncEngineDataset();
+    this.persist();
+    this.emit();
+  }
+
   /** How many feature points in a category are currently disabled. */
   disabledCountForKind(kind: string): number {
     let n = 0;
