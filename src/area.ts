@@ -13,7 +13,7 @@
 // rendering tolerance at city scale.
 
 import polygonClipping, { type MultiPolygon, type Polygon, type Ring } from "polygon-clipping";
-import { nearestFeature, nearestDistanceMi, coastlineDistanceMi, adminContaining } from "./answers";
+import { nearestFeature, nearestDistanceMi, adminContaining } from "./answers";
 import type { EliminationEngine, Step, StepSpec } from "./engine";
 import type { Answer } from "./answers";
 import type { AdminPolygon, Dataset, LatLon } from "./types";
@@ -72,6 +72,27 @@ class Projection {
 // ---- Geometry helpers (planar, miles) ---------------------------------------
 
 type Pt = [number, number];
+type Seg = [Pt, Pt];
+
+/** Planar distance (miles) from point (px,py) to segment `s`, both in XY-miles. */
+function pointToSegmentMi(px: number, py: number, s: Seg): number {
+  const ax = s[0][0];
+  const ay = s[0][1];
+  const bx = s[1][0];
+  const by = s[1][1];
+  const vx = bx - ax;
+  const vy = by - ay;
+  const wx = px - ax;
+  const wy = py - ay;
+  const vv = vx * vx + vy * vy;
+  let t = vv > 0 ? (wx * vx + wy * vy) / vv : 0;
+  if (t < 0) t = 0;
+  else if (t > 1) t = 1;
+  const dx = px - (ax + t * vx);
+  const dy = py - (ay + t * vy);
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
 
 function closeRing(ring: Pt[]): Ring {
   if (ring.length === 0) return ring;
@@ -201,39 +222,59 @@ function unionDisksXY(pts: Pt[], r: number, keepBox: Bounds | null): MultiPolygo
  * smooth iso-distance contour via marching squares rather than a union of
  * per-vertex disks.
  *
- * A border (coastline, and later international / administrative borders) has
- * ~2400 vertices. Unioning a disk of radius `d` (the seeker's distance to the
- * border) around every one of them is slow, and when the seeker sits far from
- * the border (e.g. on the Eastside, ~10mi from Puget Sound) the huge overlapping
- * disks overwhelmed polygon-clipping and threw "infinite loop when passing sweep
- * line over endpoints". Instead we rasterise: sample the signed distance
- * `dist(border) - d` on a fine grid of corners (accelerated by a spatial hash
- * with a distance-bounded search so far corners are cheap), then trace the
- * `f == 0` contour with marching squares, linearly interpolating each crossing
- * so the boundary is a smooth diagonal curve rather than a rectilinear
- * staircase. Robust and fast (<400ms) at any distance, reusable for the other
- * border questions.
+ * A border (the coastline) is a set of polylines. Unioning a disk of radius `d`
+ * (the seeker's distance to the border) around every vertex is slow, and when
+ * the seeker sits far from the border (e.g. on the Eastside, ~10mi from Puget
+ * Sound) the huge overlapping disks overwhelmed polygon-clipping and threw
+ * "infinite loop when passing sweep line over endpoints". Instead we rasterise:
+ * sample the signed distance `dist(border) - d` on a fine grid of corners
+ * (accelerated by a spatial hash with a distance-bounded search so far corners
+ * are cheap), then trace the `f == 0` contour with marching squares, linearly
+ * interpolating each crossing so the boundary is a smooth diagonal curve.
+ *
+ * Distance is measured to the nearest polyline *segment*, not the nearest
+ * vertex: after Douglas-Peucker simplification the coastline vertices are ~0.1mi
+ * apart, and a nearest-vertex field has cusps between them, so its iso-`d`
+ * contour renders as a chain of radius-`d` arcs (scalloped "concentric circles").
+ * Segment distance yields the true, smooth offset of the shoreline.
  *
  * A one-corner "guard ring" around the sampled box is forced to read as outside
  * the kept region, so every region closes with a real contour inside the padded
  * box and `closer`/`further` (which share the same `f == 0` curve but fill
  * opposite sides) come out correctly. `closer` keeps within `d`, else beyond.
  */
-function borderDistanceRegion(vertsXY: Pt[], d: number, closer: boolean, box: Polygon): MultiPolygon {
-  if (vertsXY.length === 0) return closer ? [] : [box];
-
-  // Spatial hash of border vertices for a distance-bounded nearest-vertex query.
+function borderDistanceRegion(linesXY: Pt[][], d: number, closer: boolean, box: Polygon): MultiPolygon {
+  // Spatial hash of border segments (registered in every grid bin their bbox
+  // overlaps) for a distance-bounded nearest-segment query.
   const BIN = 1.0; // miles
-  const index = new Map<string, Pt[]>();
-  for (const p of vertsXY) {
-    const k = `${Math.floor(p[0] / BIN)},${Math.floor(p[1] / BIN)}`;
-    let arr = index.get(k);
-    if (!arr) index.set(k, (arr = []));
-    arr.push(p);
+  const index = new Map<string, Seg[]>();
+  let hasSeg = false;
+  for (const line of linesXY) {
+    for (let i = 0; i + 1 < line.length; i++) {
+      const a = line[i];
+      const b = line[i + 1];
+      const seg: Seg = [a, b];
+      hasSeg = true;
+      const gx0 = Math.floor(Math.min(a[0], b[0]) / BIN);
+      const gx1 = Math.floor(Math.max(a[0], b[0]) / BIN);
+      const gy0 = Math.floor(Math.min(a[1], b[1]) / BIN);
+      const gy1 = Math.floor(Math.max(a[1], b[1]) / BIN);
+      for (let gx = gx0; gx <= gx1; gx++) {
+        for (let gy = gy0; gy <= gy1; gy++) {
+          const k = `${gx},${gy}`;
+          let arr = index.get(k);
+          if (!arr) index.set(k, (arr = []));
+          arr.push(seg);
+        }
+      }
+    }
   }
-  // Distance to the nearest border vertex, capped at `cap` (far corners return
-  // the cap — fine, since only the sign of `dist - d` matters away from the
-  // contour, and the Lipschitz-1 distance keeps corners near the contour exact).
+  if (!hasSeg) return closer ? [] : [box];
+  // Distance from a point to the nearest border segment, capped at `cap` (far
+  // corners return the cap — fine, since only the sign of `dist - d` matters away
+  // from the contour, and the Lipschitz-1 distance keeps near-contour corners
+  // exact). Each segment is registered in the bin containing its closest point,
+  // so the shell walk finds it before the break condition triggers.
   const boundedDist = (px: number, py: number, cap: number): number => {
     const cx = Math.floor(px / BIN);
     const cy = Math.floor(py / BIN);
@@ -245,15 +286,13 @@ function borderDistanceRegion(vertsXY: Pt[], d: number, closer: boolean, box: Po
           if (Math.max(Math.abs(gx - cx), Math.abs(gy - cy)) !== r) continue; // shell only
           const arr = index.get(`${gx},${gy}`);
           if (!arr) continue;
-          for (const [x, y] of arr) {
-            const dx = x - px;
-            const dy = y - py;
-            const dd = Math.sqrt(dx * dx + dy * dy);
+          for (const s of arr) {
+            const dd = pointToSegmentMi(px, py, s);
             if (dd < best) best = dd;
           }
         }
       }
-      if ((r - 1) * BIN > best) break; // no unchecked bin can hold a nearer vertex
+      if ((r - 1) * BIN > best) break; // no unchecked bin can hold a nearer segment
     }
     return best;
   };
@@ -509,12 +548,25 @@ function keptRegionForStep(
       return EMPTY; // "tie"
     }
     case "coast": {
-      const dcMi = coastlineDistanceMi(step.seeker, ds.coastlines);
-      if (dcMi === null) return boxMP;
-      if (step.answer !== "closer" && step.answer !== "further") return EMPTY; // "tie"
-      const pts: Pt[] = [];
-      for (const line of ds.coastlines) for (const [lat, lon] of line) pts.push(proj.toXY(lat, lon));
-      return borderDistanceRegion(pts, dcMi, step.answer === "closer", box);
+      if (step.answer !== "closer" && step.answer !== "further") {
+        // "tie" eliminates nothing; also guard the empty-coastline case.
+        return ds.coastlines.length === 0 ? boxMP : EMPTY;
+      }
+      if (ds.coastlines.length === 0) return boxMP;
+      // Project the coastline polylines and measure the seeker's distance to the
+      // nearest shoreline *segment* (matching the overlay's field metric) as the
+      // iso-distance threshold, so the shaded region is a clean, smooth band.
+      const linesXY: Pt[][] = ds.coastlines.map((line) => line.map(([lat, lon]) => proj.toXY(lat, lon)));
+      const [sx, sy] = proj.toXY(step.seeker.lat, step.seeker.lon);
+      let dSeg = Infinity;
+      for (const line of linesXY) {
+        for (let i = 0; i + 1 < line.length; i++) {
+          const dd = pointToSegmentMi(sx, sy, [line[i], line[i + 1]]);
+          if (dd < dSeg) dSeg = dd;
+        }
+      }
+      if (!Number.isFinite(dSeg)) return boxMP;
+      return borderDistanceRegion(linesXY, dSeg, step.answer === "closer", box);
     }
     default:
       return boxMP;
