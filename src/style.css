@@ -98,6 +98,26 @@ body {
   border-bottom-color: var(--brand);
 }
 
+/* Minimize/expand toggle at the end of the tab bar. */
+.collapse-btn {
+  flex: 0 0 auto;
+  padding: 12px 14px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: none;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted);
+}
+
+/* Collapsed sheet: hide the body so only the tab bar shows, maximizing the map. */
+#panel.collapsed {
+  max-height: none;
+}
+#panel.collapsed .panel-body {
+  display: none;
+}
+
 .panel-body {
   padding: 12px 14px 20px;
   display: flex;

@@ -63,6 +63,10 @@ export class Panels {
 
   private placingLoi = false;
 
+  // Bottom-sheet collapse (minimize) state + the toggle button reference.
+  private collapsed = false;
+  private collapseBtn: HTMLElement | null = null;
+
   // Places-tab: which feature category is expanded to its per-place list, plus
   // the current search filter within it.
   private expandedKind: string | null = null;
@@ -80,6 +84,23 @@ export class Panels {
     this.map.onMatchingToggle(() => {
       if (this.tab === "places") this.renderPlaces();
     });
+    this.observeResize();
+  }
+
+  /**
+   * Keep Leaflet's internal size in sync with the bottom sheet. The panel's
+   * height changes when switching tabs (e.g. a long History list grows it to its
+   * max) or when collapsing it; without invalidateSize the map keeps its old
+   * dimensions and leaves an unrendered grey band where it grew.
+   */
+  private observeResize(): void {
+    if (typeof ResizeObserver === "undefined") return;
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => this.map.map.invalidateSize());
+    });
+    ro.observe(this.root);
   }
 
   private mount(): void {
@@ -101,23 +122,52 @@ export class Panels {
         }),
       ),
     );
+    this.collapseBtn = el("button", {
+      class: "collapse-btn",
+      title: "Minimize / expand the panel",
+      "aria-label": "Minimize or expand the panel",
+      text: "▾",
+      onclick: () => this.setCollapsed(!this.collapsed),
+    });
+    bar.append(this.collapseBtn);
     this.root.append(bar, this.body);
     this.renderTab();
   }
 
+  /** Collapse (minimize) or expand the bottom sheet to free up map space. */
+  private setCollapsed(collapsed: boolean): void {
+    this.collapsed = collapsed;
+    this.root.classList.toggle("collapsed", collapsed);
+    if (this.collapseBtn) this.collapseBtn.textContent = collapsed ? "▴" : "▾";
+    // The ResizeObserver re-flows the map once the panel height settles.
+  }
+
   private switchTab(id: TabId): void {
+    // Tapping a tab while minimized expands the sheet to show that tab.
+    if (this.collapsed) this.setCollapsed(false);
     this.tab = id;
     this.map.clearPreview();
     this.selectedAnswerKey = null;
-    if (id !== "ask" || this.category !== "thermometer") {
+    // Preserve the thermometer destination ("drop box") across tab switches: show
+    // its marker only on the Ask/thermometer view, but keep this.seekerTo so it
+    // reappears (with a working drag handler) when returning to Ask.
+    if (id === "ask" && this.category === "thermometer") {
+      this.showThermometerMarker();
+    } else {
       this.map.setSeekerTo(null);
-      this.seekerTo = null;
     }
     this.placingLoi = false;
     for (const b of this.root.querySelectorAll(".tab")) {
       b.classList.toggle("active", (b as HTMLElement).dataset.tab === id);
     }
     this.renderTab();
+  }
+
+  /** (Re)show the thermometer destination marker and (re)bind its drag handler. */
+  private showThermometerMarker(): void {
+    if (!this.seekerTo) return;
+    this.map.setSeekerTo(this.seekerTo);
+    this.map.onSeekerToMove((loc) => { this.seekerTo = loc; this.renderPreview(); });
   }
 
   private onStoreChange(): void {
@@ -245,8 +295,7 @@ export class Panels {
     if (cat === "thermometer") {
       const s = this.store.seeker;
       this.seekerTo = { lat: s.lat + 0.02, lon: s.lon + 0.02 };
-      this.map.setSeekerTo(this.seekerTo);
-      this.map.onSeekerToMove((loc) => { this.seekerTo = loc; this.renderPreview(); });
+      this.showThermometerMarker();
     } else {
       this.map.setSeekerTo(null);
       this.seekerTo = null;
