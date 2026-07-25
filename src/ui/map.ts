@@ -335,6 +335,8 @@ export class MapView {
     }
 
     // Eliminated-area polygons; computed lazily by the caller when toggled on.
+    // Default ON so seekers immediately see the ruled-out region.
+    this.areaLayer.addTo(this.map);
     overlays["Eliminated area"] = this.areaLayer;
 
     // Feature reference points: one toggleable layer per feature kind used by

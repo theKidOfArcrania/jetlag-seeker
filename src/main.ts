@@ -71,7 +71,8 @@ async function main(): Promise<void> {
   // Toggleable overlays: boundary, admin regions, transit lines, and the
   // eliminated area. The area is computed analytically (exact per-question
   // polygons) only while its layer is visible, and recomputed on store changes.
-  let areaVisible = false;
+  // The eliminated-area layer defaults ON (see setupOverlays), so start visible.
+  let areaVisible = true;
   map.setupOverlays(ds, (visible) => {
     areaVisible = visible;
     if (visible) renderArea();
