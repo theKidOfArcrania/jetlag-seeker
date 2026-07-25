@@ -285,6 +285,26 @@ export class MapView {
     transitLayer.addTo(this.map);
     overlays["Transit lines"] = transitLayer;
 
+    // Coastline reference: the OSM `natural=coastline` polylines (the Puget Sound
+    // saltwater shoreline) used by the "measuring coastline" question. Default
+    // OFF; drawn in water blue. Note this covers salt water only — inland lakes
+    // (Washington, Sammamish) are not coastline.
+    const coastlines = ds.coastlines ?? [];
+    if (coastlines.length > 0) {
+      const coastLayer = L.layerGroup();
+      for (const line of coastlines) {
+        if (line.length < 2) continue;
+        L.polyline(line as [number, number][], {
+          color: "#0369a1",
+          weight: 2.5,
+          opacity: 0.85,
+        })
+          .bindTooltip("Coastline", { sticky: true })
+          .addTo(coastLayer);
+      }
+      overlays[`Coastline (${coastlines.length})`] = coastLayer;
+    }
+
     // Eliminated-area polygons; computed lazily by the caller when toggled on.
     overlays["Eliminated area"] = this.areaLayer;
 
