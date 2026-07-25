@@ -355,8 +355,12 @@ export class MapView {
           fillColor: color,
           fillOpacity: 0.9,
         })
-          .bindTooltip(`${f.name || featureLabel(kind)} (${featureLabel(kind)}) — tap to toggle`)
-          .on("click", () => this.featureClickCb?.(f.id))
+          .bindTooltip(`${f.name || featureLabel(kind)} (${featureLabel(kind)}) — double-tap to toggle`)
+          .on("dblclick", (e: L.LeafletMouseEvent) => {
+            // Swallow the event so Leaflet's double-click zoom doesn't also fire.
+            L.DomEvent.stop(e.originalEvent);
+            this.featureClickCb?.(f.id);
+          })
           .addTo(grp);
         this.matchingMarkers.set(f.id, { marker, color });
       }
