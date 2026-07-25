@@ -50,6 +50,26 @@ ADMIN_SIMPLIFY_TOL = 0.0002
 COAST_SIMPLIFY_TOL = 0.0002
 LINE_SIMPLIFY_TOL = 0.0001  # transit lines want a little more fidelity (~11 m)
 
+# Hand-curated feature locations to add on top of the OSM-derived POIs, keyed by
+# feature kind. Each entry is (name, lat, lon, id). Use for game-specific spots
+# that OSM doesn't tag the way the game counts them (e.g. Boeing Field, which OSM
+# marks non-commercial, or small/bespoke "zoos"/"aquariums"). They are merged in
+# before the play-region filter, so any that fall outside the boundary are
+# dropped with a warning just like OSM features.
+MANUAL_FEATURES: dict[str, list[tuple[str, float, float, str]]] = {
+    "zoo": [
+        ("Ballard Mallards", 47.6764752, -122.3833345, "manual/ballard-mallards"),
+    ],
+    "aquarium": [
+        ("Aquatic Enterprises Inc", 47.5671742, -122.3543913, "manual/aquatic-enterprises"),
+        ("Tanks and Beyond", 47.6006742, -122.3351764, "manual/tanks-and-beyond"),
+        ("FishTanks4u", 47.6367866, -122.3411615, "manual/fishtanks4u"),
+    ],
+    "airport": [
+        ("Boeing Field", 47.5414813, -122.3197907, "relation/537472"),
+    ],
+}
+
 # Authoritative game map ("Jetlag the Seattle" Google My Map). It defines the
 # hiding boundary (Seattle City Limit), the exact hider transit network + stations,
 # and the neighborhood regions used for admin-matching questions. Cached locally.
@@ -484,6 +504,20 @@ def build(cfg: GameConfig) -> dict:
             features_by_kind[kind] = kept
         else:
             print(f"  dropping feature kind '{kind}' (no locations inside play region)")
+    # Merge hand-curated locations (deduped by id). These are intentional
+    # game-specific additions, so they bypass the play-region gate that prunes
+    # bulk OSM POIs — e.g. Boeing Field sits ~100m outside the simplified boundary
+    # but is within Seattle's real limits and wanted as an airport reference.
+    for kind, items in MANUAL_FEATURES.items():
+        bucket = features_by_kind.setdefault(kind, [])
+        seen = {f["id"] for f in bucket}
+        for name, lat, lon, fid in items:
+            if fid in seen:
+                continue
+            bucket.append({"id": fid, "name": name, "lat": _round(lat), "lon": _round(lon)})
+            print(f"  added manual feature {name!r} ({kind})")
+        if not bucket:
+            del features_by_kind[kind]
     nonempty_kinds = set(features_by_kind)
     measuring_kinds = [k for k in MEASURING_FEATURE_KINDS if k in nonempty_kinds]
     matching_kinds = [k for k in MATCHING_FEATURE_KINDS if k in nonempty_kinds]
