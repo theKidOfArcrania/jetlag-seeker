@@ -235,4 +235,19 @@ describe("computePreviewEliminatedArea (analytic)", () => {
     expect(inCloser).toBeGreaterThan(0);
     expect(inFurther).toBeGreaterThan(0);
   });
+
+  it("coast: a seeker far from the water (Eastside) computes without crashing", () => {
+    // Regression: from ~10mi inland the disk-union overlay overwhelmed
+    // polygon-clipping ("infinite loop passing sweep line over endpoints") and
+    // hung the app. The rectilinear iso-distance builder must stay robust/fast.
+    const eng = new EliminationEngine(ds);
+    const eastside: LatLon = { lat: 47.6481, lon: -122.1431 }; // Redmond
+    const spec = { category: "coast", payload: "coastline", seeker: eastside } as const;
+    for (const ans of ["closer", "further"] as const) {
+      const t0 = performance.now();
+      const mp = computePreviewEliminatedArea(ds, eng, spec, ans);
+      expect(performance.now() - t0).toBeLessThan(2000);
+      expect(Array.isArray(mp)).toBe(true);
+    }
+  });
 });

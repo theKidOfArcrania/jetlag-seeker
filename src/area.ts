@@ -196,6 +196,237 @@ function unionDisksXY(pts: Pt[], r: number, keepBox: Bounds | null): MultiPolygo
   return polygonClipping.union(blobs[0], ...blobs.slice(1));
 }
 
+/**
+ * Kept region for a "closer/further to a border" measuring question, built as a
+ * smooth iso-distance contour via marching squares rather than a union of
+ * per-vertex disks.
+ *
+ * A border (coastline, and later international / administrative borders) has
+ * ~2400 vertices. Unioning a disk of radius `d` (the seeker's distance to the
+ * border) around every one of them is slow, and when the seeker sits far from
+ * the border (e.g. on the Eastside, ~10mi from Puget Sound) the huge overlapping
+ * disks overwhelmed polygon-clipping and threw "infinite loop when passing sweep
+ * line over endpoints". Instead we rasterise: sample the signed distance
+ * `dist(border) - d` on a fine grid of corners (accelerated by a spatial hash
+ * with a distance-bounded search so far corners are cheap), then trace the
+ * `f == 0` contour with marching squares, linearly interpolating each crossing
+ * so the boundary is a smooth diagonal curve rather than a rectilinear
+ * staircase. Robust and fast (<400ms) at any distance, reusable for the other
+ * border questions.
+ *
+ * A one-corner "guard ring" around the sampled box is forced to read as outside
+ * the kept region, so every region closes with a real contour inside the padded
+ * box and `closer`/`further` (which share the same `f == 0` curve but fill
+ * opposite sides) come out correctly. `closer` keeps within `d`, else beyond.
+ */
+function borderDistanceRegion(vertsXY: Pt[], d: number, closer: boolean, box: Polygon): MultiPolygon {
+  if (vertsXY.length === 0) return closer ? [] : [box];
+
+  // Spatial hash of border vertices for a distance-bounded nearest-vertex query.
+  const BIN = 1.0; // miles
+  const index = new Map<string, Pt[]>();
+  for (const p of vertsXY) {
+    const k = `${Math.floor(p[0] / BIN)},${Math.floor(p[1] / BIN)}`;
+    let arr = index.get(k);
+    if (!arr) index.set(k, (arr = []));
+    arr.push(p);
+  }
+  // Distance to the nearest border vertex, capped at `cap` (far corners return
+  // the cap — fine, since only the sign of `dist - d` matters away from the
+  // contour, and the Lipschitz-1 distance keeps corners near the contour exact).
+  const boundedDist = (px: number, py: number, cap: number): number => {
+    const cx = Math.floor(px / BIN);
+    const cy = Math.floor(py / BIN);
+    let best = cap;
+    const maxR = Math.ceil(cap / BIN) + 2;
+    for (let r = 0; r <= maxR; r++) {
+      for (let gx = cx - r; gx <= cx + r; gx++) {
+        for (let gy = cy - r; gy <= cy + r; gy++) {
+          if (Math.max(Math.abs(gx - cx), Math.abs(gy - cy)) !== r) continue; // shell only
+          const arr = index.get(`${gx},${gy}`);
+          if (!arr) continue;
+          for (const [x, y] of arr) {
+            const dx = x - px;
+            const dy = y - py;
+            const dd = Math.sqrt(dx * dx + dy * dy);
+            if (dd < best) best = dd;
+          }
+        }
+      }
+      if ((r - 1) * BIN > best) break; // no unchecked bin can hold a nearer vertex
+    }
+    return best;
+  };
+
+  // Universe box extent.
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const [x, y] of box[0]) {
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+
+  const cell = Math.min(Math.max(d * 0.1, 0.05), 0.2);
+  const nx = Math.max(2, Math.ceil((x1 - x0) / cell) + 1); // corner columns
+  const ny = Math.max(2, Math.ceil((y1 - y0) / cell) + 1); // corner rows
+  const cap = d + 2 * cell + 0.001;
+
+  // Signed-distance samples at every corner.
+  const val = new Float64Array(nx * ny);
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) val[j * nx + i] = boundedDist(x0 + i * cell, y0 + j * cell, cap);
+  }
+  // Guard ring: force the outermost corners to read as outside the kept region.
+  const guard = closer ? d + 1000 : -1000;
+  for (let i = 0; i < nx; i++) {
+    val[i] = guard;
+    val[(ny - 1) * nx + i] = guard;
+  }
+  for (let j = 0; j < ny; j++) {
+    val[j * nx] = guard;
+    val[j * nx + (nx - 1)] = guard;
+  }
+
+  // f = dist - d for `closer`, negated for `further`; inside the kept region is f <= 0.
+  const f = (i: number, j: number): number => (closer ? val[j * nx + i] - d : d - val[j * nx + i]);
+  const inside = (v: number): boolean => v <= 0;
+  const cx = (i: number): number => x0 + i * cell;
+  const cy = (j: number): number => y0 + j * cell;
+  // Interpolated f==0 crossing on the edge between corners (ia,ja) and (ib,jb).
+  const lerp = (ia: number, ja: number, ib: number, jb: number): Pt => {
+    const fa = f(ia, ja);
+    const fb = f(ib, jb);
+    let t = fa / (fa - fb);
+    if (!Number.isFinite(t)) t = 0.5;
+    t = Math.max(0, Math.min(1, t));
+    return [cx(ia) + t * (cx(ib) - cx(ia)), cy(ja) + t * (cy(jb) - cy(ja))];
+  };
+
+  // Per-edge crossing points, keyed so adjacent cells share the same node.
+  const HK = (i: number, j: number): string => `H_${i}_${j}`; // horizontal edge (i,j)-(i+1,j)
+  const VK = (i: number, j: number): string => `V_${i}_${j}`; // vertical edge (i,j)-(i,j+1)
+  const ptOf = new Map<string, Pt>();
+  const adj = new Map<string, string[]>();
+  const link = (a: string, b: string): void => {
+    let la = adj.get(a);
+    if (!la) adj.set(a, (la = []));
+    la.push(b);
+    let lb = adj.get(b);
+    if (!lb) adj.set(b, (lb = []));
+    lb.push(a);
+  };
+
+  for (let j = 0; j < ny - 1; j++) {
+    for (let i = 0; i < nx - 1; i++) {
+      const fBL = f(i, j);
+      const fBR = f(i + 1, j);
+      const fTR = f(i + 1, j + 1);
+      const fTL = f(i, j + 1);
+      const bBL = inside(fBL);
+      const bBR = inside(fBR);
+      const bTR = inside(fTR);
+      const bTL = inside(fTL);
+      const c = (bBL ? 1 : 0) | (bBR ? 2 : 0) | (bTR ? 4 : 0) | (bTL ? 8 : 0);
+      if (c === 0 || c === 15) continue;
+      const eB = HK(i, j);
+      const eT = HK(i, j + 1);
+      const eL = VK(i, j);
+      const eR = VK(i + 1, j);
+      if (!ptOf.has(eB) && bBL !== bBR) ptOf.set(eB, lerp(i, j, i + 1, j));
+      if (!ptOf.has(eT) && bTL !== bTR) ptOf.set(eT, lerp(i, j + 1, i + 1, j + 1));
+      if (!ptOf.has(eL) && bBL !== bTL) ptOf.set(eL, lerp(i, j, i, j + 1));
+      if (!ptOf.has(eR) && bBR !== bTR) ptOf.set(eR, lerp(i + 1, j, i + 1, j + 1));
+      const conn: [string, string][] = [];
+      switch (c) {
+        case 1: case 14: conn.push([eL, eB]); break;
+        case 2: case 13: conn.push([eB, eR]); break;
+        case 3: case 12: conn.push([eL, eR]); break;
+        case 4: case 11: conn.push([eR, eT]); break;
+        case 6: case 9: conn.push([eB, eT]); break;
+        case 7: case 8: conn.push([eL, eT]); break;
+        case 5: {
+          const centre = inside((fBL + fBR + fTR + fTL) / 4);
+          if (centre) { conn.push([eL, eT], [eB, eR]); } else { conn.push([eL, eB], [eR, eT]); }
+          break;
+        }
+        case 10: {
+          const centre = inside((fBL + fBR + fTR + fTL) / 4);
+          if (centre) { conn.push([eB, eL], [eT, eR]); } else { conn.push([eB, eR], [eT, eL]); }
+          break;
+        }
+      }
+      for (const [a, b] of conn) if (ptOf.has(a) && ptOf.has(b)) link(a, b);
+    }
+  }
+  if (adj.size === 0) return closer ? [] : [box];
+
+  // Walk linked crossings into closed loops.
+  const visited = new Set<string>();
+  const rings: Ring[] = [];
+  for (const start of adj.keys()) {
+    if (visited.has(start)) continue;
+    const loop: string[] = [];
+    let cur = start;
+    let prev = "";
+    for (let g = 0; g < adj.size + 5; g++) {
+      loop.push(cur);
+      visited.add(cur);
+      const nbrs = adj.get(cur) || [];
+      let next = nbrs.find((n) => n !== prev && !visited.has(n));
+      if (next === undefined) {
+        next = nbrs.find((n) => n === start && loop.length > 2);
+        if (next === undefined) break;
+      }
+      prev = cur;
+      cur = next;
+      if (cur === start) break;
+    }
+    if (loop.length >= 3) rings.push(loop.map((k) => ptOf.get(k)!));
+  }
+  if (rings.length === 0) return closer ? [] : [box];
+
+  // Even-odd nesting: rings at even containment depth are outers, odd are holes.
+  const pip = (r: Ring, p: Pt): boolean => {
+    let ins = false;
+    for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+      const xi = r[i][0];
+      const yi = r[i][1];
+      const xj = r[j][0];
+      const yj = r[j][1];
+      if (yi > p[1] !== yj > p[1] && p[0] < ((xj - xi) * (p[1] - yi)) / (yj - yi) + xi) ins = !ins;
+    }
+    return ins;
+  };
+  const depthOf = (r: Ring): number => {
+    let dp = 0;
+    const p = r[0];
+    for (const o of rings) {
+      if (o === r) continue;
+      if (pip(o, p)) dp++;
+    }
+    return dp;
+  };
+  const polys: Polygon[] = [];
+  const holes: Ring[] = [];
+  for (const r of rings) {
+    if (depthOf(r) % 2 === 0) polys.push([r]);
+    else holes.push(r);
+  }
+  for (const h of holes) {
+    for (const poly of polys) {
+      if (pip(poly[0], h[0])) {
+        poly.push(h);
+        break;
+      }
+    }
+  }
+  return polys;
+}
+
 /** Voronoi cell of `site` among `sites` (planar), clipped to `box`. */
 function voronoiCellXY(site: Pt, sites: Pt[], box: Polygon): Polygon {
   let ring: Pt[] = box[0].slice();
@@ -280,12 +511,10 @@ function keptRegionForStep(
     case "coast": {
       const dcMi = coastlineDistanceMi(step.seeker, ds.coastlines);
       if (dcMi === null) return boxMP;
+      if (step.answer !== "closer" && step.answer !== "further") return EMPTY; // "tie"
       const pts: Pt[] = [];
       for (const line of ds.coastlines) for (const [lat, lon] of line) pts.push(proj.toXY(lat, lon));
-      const union = unionDisksXY(pts, dcMi, runBox);
-      if (step.answer === "closer") return union;
-      if (step.answer === "further") return complement(union);
-      return EMPTY; // "tie"
+      return borderDistanceRegion(pts, dcMi, step.answer === "closer", box);
     }
     default:
       return boxMP;
