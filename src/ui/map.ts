@@ -38,6 +38,34 @@ function divPin(emoji: string, color: string): L.DivIcon {
   });
 }
 
+// Emoji glyphs (◉/◎) are centred within their line box differently on every
+// platform's font, so a divPin(...) built from them drifts a few px off its true
+// location — visibly misaligned against the exact-centred radar circle. For the
+// circular markers that must sit precisely on their coordinate we draw an inline
+// SVG instead: SVG geometry is pixel-exact everywhere, independent of fonts.
+const PIN_SVG = 28;
+const PIN_C = PIN_SVG / 2;
+
+/** Filled bullseye (◉ replacement): a coloured disc with a white centre dot. */
+function bullseyePin(color: string): L.DivIcon {
+  const html =
+    `<svg width="${PIN_SVG}" height="${PIN_SVG}" viewBox="0 0 ${PIN_SVG} ${PIN_SVG}">` +
+    `<circle cx="${PIN_C}" cy="${PIN_C}" r="9" fill="${color}" stroke="#fff" stroke-width="2.5"/>` +
+    `<circle cx="${PIN_C}" cy="${PIN_C}" r="3" fill="#fff"/>` +
+    `</svg>`;
+  return L.divIcon({ className: "jl-pin-svg", html, iconSize: [PIN_SVG, PIN_SVG], iconAnchor: [PIN_C, PIN_C] });
+}
+
+/** Hollow ring (◎ replacement): a coloured outline with a transparent centre. */
+function ringPin(color: string): L.DivIcon {
+  const html =
+    `<svg width="${PIN_SVG}" height="${PIN_SVG}" viewBox="0 0 ${PIN_SVG} ${PIN_SVG}">` +
+    `<circle cx="${PIN_C}" cy="${PIN_C}" r="9" fill="none" stroke="#fff" stroke-width="4"/>` +
+    `<circle cx="${PIN_C}" cy="${PIN_C}" r="9" fill="none" stroke="${color}" stroke-width="2.5"/>` +
+    `</svg>`;
+  return L.divIcon({ className: "jl-pin-svg", html, iconSize: [PIN_SVG, PIN_SVG], iconAnchor: [PIN_C, PIN_C] });
+}
+
 export type SeekerMoveHandler = (loc: LatLon) => void;
 export type MapClickHandler = (loc: LatLon) => void;
 
@@ -94,7 +122,7 @@ export class MapView {
       .addTo(this.map);
 
     this.seekerMarker = L.marker([seeker.lat, seeker.lon], {
-      icon: divPin("◉", COLORS.seeker),
+      icon: bullseyePin(COLORS.seeker),
       draggable: true,
       zIndexOffset: 1000,
     })
@@ -138,7 +166,7 @@ export class MapView {
     }
     if (!this.seekerToMarker) {
       this.seekerToMarker = L.marker([loc.lat, loc.lon], {
-        icon: divPin("◎", COLORS.seekerTo),
+        icon: ringPin(COLORS.seekerTo),
         draggable: true,
         zIndexOffset: 900,
       }).bindTooltip("Thermometer start (drag me)").addTo(this.map);

@@ -333,6 +333,11 @@ body {
     0 0 2px #fff,
     0 0 3px #fff;
 }
+/* Inline-SVG pins (seeker bullseye / thermometer-start ring). SVG geometry is
+   pixel-exact so these sit precisely on their coordinate, unlike emoji glyphs. */
+.jl-pin-svg {
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+}
 
 .fatal {
   padding: 20px;
