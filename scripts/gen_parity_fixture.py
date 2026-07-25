@@ -40,8 +40,15 @@ def ctx_from_dataset(ds: dict) -> OsmContext:
 def main() -> int:
     ds = json.loads(DATASET.read_text())
     ctx = ctx_from_dataset(ds)
-    # Exclude admin questions: their region model differs from jetlag's.
-    questions = [q for q in build_question_catalog() if q.category != "admin"]
+    # Exclude admin questions and any question dropped from the shipped catalog
+    # (e.g. feature kinds with no in-region locations), so the fixture stays
+    # aligned 1:1 with the dataset the client actually loads.
+    shipped = {(q["category"], str(q["payload"])) for q in ds["question_catalog"]}
+    questions = [
+        q
+        for q in build_question_catalog()
+        if q.category != "admin" and (q.category, str(q.payload)) in shipped
+    ]
 
     cands = ds["candidates"]
     # Hiders: a spread across the candidate list. Seekers: origin + a few candidates.

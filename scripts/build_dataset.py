@@ -468,21 +468,35 @@ def build(cfg: GameConfig) -> dict:
     start = next((c for c in candidates if c["name"].lower().startswith("symphony")), None)
     start_lat, start_lon = (start["lat"], start["lon"]) if start else (47.607246, -122.335754)
 
-    features_by_kind = {
-        kind: [
+    # POI features, restricted to the play region: a hider is confined to the
+    # boundary, so out-of-area locations are dropped (they were also cluttering
+    # the map). Kinds left with no in-area feature are removed entirely, and their
+    # measuring/matching questions are dropped below.
+    region_prepared = prep(region)
+    features_by_kind = {}
+    for kind, feats in ctx.features_by_kind.items():
+        kept = [
             {"id": f.osm_id, "name": f.name, "lat": _round(f.lat), "lon": _round(f.lon)}
             for f in feats
+            if region_prepared.covers(ShapelyPoint(f.lon, f.lat))
         ]
-        for kind, feats in ctx.features_by_kind.items()
-    }
+        if kept:
+            features_by_kind[kind] = kept
+        else:
+            print(f"  dropping feature kind '{kind}' (no locations inside play region)")
+    nonempty_kinds = set(features_by_kind)
+    measuring_kinds = [k for k in MEASURING_FEATURE_KINDS if k in nonempty_kinds]
+    matching_kinds = [k for k in MATCHING_FEATURE_KINDS if k in nonempty_kinds]
     coastlines = [_simplify_polyline(ln, COAST_SIMPLIFY_TOL) for ln in ctx.coastlines]
 
-    # Question catalog: keep the verified non-admin questions from jetlag; replace
-    # the OSM admin-level questions with the map's three nested matching tiers.
+    # Question catalog: keep the verified non-admin questions from jetlag (dropping
+    # any measuring/matching question whose feature kind is now empty); replace the
+    # OSM admin-level questions with the map's three nested matching tiers.
     catalog = [
         {"category": q.category, "name": q.name, "payload": q.payload}
         for q in build_question_catalog()
         if q.category != "admin"
+        and not (q.category in ("measuring", "matching") and q.payload not in nonempty_kinds)
     ]
     catalog += [
         {"category": "admin", "name": "Same city", "payload": "city"},
@@ -499,8 +513,8 @@ def build(cfg: GameConfig) -> dict:
             "zone_radius_mi": cfg.zone_radius_mi,
             "radar_bands_mi": list(RADAR_DISTANCES_MI),
             "thermometer_bands_mi": list(THERMOMETER_DISTANCES_MI),
-            "measuring_kinds": list(MEASURING_FEATURE_KINDS),
-            "matching_kinds": list(MATCHING_FEATURE_KINDS),
+            "measuring_kinds": measuring_kinds,
+            "matching_kinds": matching_kinds,
             "admin_regions": ["city", "neighborhood", "neighborhood_region"],
         },
         "candidates": candidates,
