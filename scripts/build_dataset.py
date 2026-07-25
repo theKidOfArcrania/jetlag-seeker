@@ -79,6 +79,30 @@ MANUAL_FEATURES: dict[str, list[tuple[str, float, float, str]]] = {
     "airport": [
         ("Boeing Field", 47.5414813, -122.3197907, "relation/537472"),
     ],
+    "mountain": [
+        # OSM doesn't tag Denny Hill (it was regraded away a century ago), but the
+        # game map counts it, so pin it at its historic summit.
+        ("Denny Hill", 47.6098196, -122.3423706, "manual/denny-hill"),
+    ],
+}
+
+# Some OSM feature kinds carry many entries the game doesn't count. For these we
+# keep only an explicit allow-list of OSM ids (hand-verified against the game's
+# intended set); everything else of that kind is dropped. Manually-added
+# MANUAL_FEATURES of the same kind are merged in afterwards and bypass this gate.
+FEATURE_ID_ALLOWLIST: dict[str, set[str]] = {
+    # The seven "hills" the game recognises. Denny Hill comes from MANUAL_FEATURES;
+    # the remaining six are these OSM peaks (the "First Hill" node kept is the one
+    # on Mercer Island; the Seattle-proper First Hill node and various unnamed
+    # north-Seattle peaks are intentionally excluded).
+    "mountain": {
+        "node/3420114199",   # Kite Hill
+        "node/1535793729",   # Capitol Hill
+        "node/356541719",    # First Hill (Mercer Island)
+        "node/349018586",    # Queen Anne Hill
+        "node/3500173514",   # Promontory Point
+        "node/5960639844",   # unnamed hill on Mercer Island
+    },
 }
 
 # Authoritative game map ("Jetlag the Seattle" Google My Map). It defines the
@@ -619,6 +643,9 @@ def build(cfg: GameConfig) -> dict:
             for f in feats
             if region_prepared.covers(ShapelyPoint(f.lon, f.lat))
         ]
+        allow = FEATURE_ID_ALLOWLIST.get(kind)
+        if allow is not None:
+            kept = [f for f in kept if f["id"] in allow]
         if kept:
             features_by_kind[kind] = kept
         else:
